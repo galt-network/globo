@@ -1,0 +1,30 @@
+{:paths ["server/src" "server/dev"]
+ :deps {io.github.tonsky/clj-simple-router {:mvn/version "0.1.2"}
+        io.github.tonsky/clj-reload {:mvn/version "1.0.0"}
+        ring/ring-core {:mvn/version "1.15.3"}
+        markdown-clj/markdown-clj {:mvn/version "1.12.4"}
+        ring-logger/ring-logger {:mvn/version "1.1.1"}
+        is.galt.globo/globo {:local/root ".."}
+        lambdaisland/uri {:mvn/version "1.19.155"}}
+ :tasks
+ {nrepl
+  {:requires ([server.main]
+              [user]
+              [babashka.fs :as fs]
+              [babashka.nrepl.server :as srv])
+   :task (do (srv/start-server! {:host "localhost"
+                                 :port 1339})
+             (spit ".nrepl-port" "1339")
+             (-> (Runtime/getRuntime)
+                 (.addShutdownHook
+                  (Thread. (fn [] (fs/delete ".nrepl-port")))))
+             (deref (promise)))}
+  server
+  {:doc "Starts http-kit server"
+   :requires ([server.main])
+   :task (exec 'server.main/start!)
+   :exec-args {:example :shadow-cljs :port 3000}}}
+ :profiles
+ {:default
+  {:init
+   [(require '[user])]}}}

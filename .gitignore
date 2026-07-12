@@ -1,0 +1,7 @@
+.lsp
+.nrepl-port
+node_modules
+.shadow-cljs
+Session.vim
+.clojure-mcp
+resources/public/js/cljs-runtime

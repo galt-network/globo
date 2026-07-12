@@ -1,0 +1,31 @@
+(ns is.galt.globo.ui.connection
+  (:require
+    [applied-science.js-interop :as j]
+    [clojure.walk :as walk]
+    [superstructor.re-frame.fetch-fx]))
+
+(defonce event-source (atom {}))
+
+(defn- type->kw
+  [m]
+  (cond
+    (and (map? m) (contains? m :type))
+    (update m :type keyword)
+    :else m))
+
+(defn parse-event
+  [data]
+  (as-> data v
+      (.parse js/JSON v)
+      (js->clj v)
+      (walk/keywordize-keys v)
+      (walk/postwalk type->kw v)))
+
+(defn setup-sse-events
+  [{:keys [connection-url on-open on-error on-message]}]
+  (let [es (new js/EventSource connection-url)]
+    (.addEventListener es "message" #(-> (j/get % :data) parse-event on-message))
+    (.addEventListener es "open" on-open)
+    (.addEventListener es "error" on-error)
+    (reset! event-source es)
+    (println ">>> !!!! app.connection initialized!")))

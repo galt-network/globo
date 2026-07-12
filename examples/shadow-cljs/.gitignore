@@ -1,0 +1,7 @@
+public/js
+node_modules
+.shadow-cljs
+.clojure-mcp
+Session.vim
+release
+.nrepl-port

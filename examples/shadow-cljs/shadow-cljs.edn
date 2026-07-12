@@ -1,0 +1,30 @@
+{:deps {:aliases [:dev]}
+ :nrepl
+ {:port 3333}
+
+ :jvm-opts ["--sun-misc-unsafe-memory-access=allow"]
+ :builds
+ {:app
+  {:target :browser
+   :output-dir "public/js"
+   :asset-path "/js"
+   :js-options {:js-provider :shadow
+                :resolve { "globe.gl" {:target :global :global "Globe"}}}
+   :closure-defines {app.main/GLOBO_API_BASE_URL "/map"}
+   :modules {:main {:init-fn app.main/init}}
+   :devtools {:before-load app.main/stop!
+              :after-load app.main/start!
+              :preloads [
+                         ; devtools.preload
+                         ; day8.re-frame-10x.preload.react-18
+                         ]}
+   :dev {:compiler-options
+         {:warnings-as-errors {:ignore #{spec-tools.* cljs.*}
+                               :warnings-types #{:undeclared-var}}
+          :closure-defines
+          {re-frame.trace.trace-enabled?        true
+           day8.re-frame.tracing.trace-enabled? true}}}
+   :release {:output-dir "release/public/js"
+             :build-options
+             {:ns-aliases {day8.re-frame.tracing day8.re-frame.tracing-stubs}}}}}}
+
