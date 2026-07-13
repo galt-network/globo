@@ -5,7 +5,7 @@
 
 (defn update-user
   [{:keys [send! storage user-id connections-for]} message]
-  (swap! storage update-in [:users user-id] merge (:content message))
+  (swap! storage update-in [:users user-id] merge (select-keys (:content message) [:name]))
   (send! (connections-for :all-but-sender)
          {:type :update-user
           :user-id user-id
@@ -20,13 +20,15 @@
   [{:keys [send! storage user-id connections-for]} message]
   (println ">>> server/messages update-map-objects" message)
   (let [content (:content message)
-        op (case (keyword (:op content))
-             :add set/union
-             :remove set/difference)
-        updated-objects (op (get-in @storage [:map-objects]) (into #{} (:objects content)))
-        message {:type :update-object :content content}]
-    (swap! storage assoc-in [:map-objects] updated-objects)
-    (send! (connections-for :all-but-sender) message)))
+        update-fn (case (keyword (:op content))
+                    :add set/union
+                    :remove set/difference
+                    (println ">>> SKIPPED update-map-objects with unrecognized :op" (:op content)))]
+    (when update-fn
+      (let [updated-objects (update-fn (get-in @storage [:map-objects]) (into #{} (:objects content)))
+            message {:type :update-object :content content}]
+        (swap! storage assoc-in [:map-objects] updated-objects)
+        (send! (connections-for :all-but-sender) message)))))
 
 (defn connections-for
   [{:keys [storage sse-clients user-id]} target]

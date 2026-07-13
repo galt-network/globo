@@ -16,4 +16,4 @@
   [target-clients data]
   (doseq [ch target-clients]
     (hk-server/send! ch (sse-event data) false))
-  true)
+  (boolean (seq target-clients)))
