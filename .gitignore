@@ -4,4 +4,4 @@ node_modules
 .shadow-cljs
 Session.vim
 .clojure-mcp
-resources/public/js/cljs-runtime
+resources/public/js

@@ -9,8 +9,10 @@
 (defn- type->kw
   [m]
   (cond
-    (and (map? m) (contains? m :type))
-    (update m :type keyword)
+    (map? m)
+    (cond-> m
+      (contains? m :type) (update :type keyword)
+      (contains? m :op)   (update :op keyword))
     :else m))
 
 (defn parse-event

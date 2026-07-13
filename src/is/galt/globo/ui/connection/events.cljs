@@ -37,7 +37,7 @@
       {:connection-url (get-in db [:config :connection-url])
        :on-open #(js/console.log ">> is.galt.globo.ui.connection.events OPEN received" %)
        :on-error (fn [e]
-                   (rf/dispatch [:app.connection.events/disconnected])
+                   (rf/dispatch [:is.galt.globo.ui.connection.events/disconnected])
                    (js/console.log ">> app.connection: ERROR received" e))
        :on-message dispatch-sse->re-frame})))
 

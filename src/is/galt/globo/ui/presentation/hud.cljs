@@ -60,7 +60,7 @@
        ^{:key (str "placeable-" (name (:model-id o)))}
        [:button {:class "button is-primary is-outlined"
                  :on-click #(place-object (o :model-id))}
-        (str (:icon o) " " (:title o))])]]])
+        (str (:icon o) " " (:name o))])]]])
 
 (defn favorite-places
   [{:keys [favorites go-to-favorite add-favorite]}]
@@ -246,7 +246,7 @@
      (for [o (filter :show-in-summary? placeable-map-objects)]
        ^{:key (str "placeable-sum" (name (:model-id o)))}
        [:button {:class "button is-small is-primary is-outlined"
-                 :title (:title o)
+                 :title (:name o)
                  :on-click #(place-object (:model-id o))}
         (:icon o)])
      [:button {:class "button is-small is-info is-outlined" :title "Users online"}

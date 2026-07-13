@@ -47,27 +47,26 @@
 (rf/reg-event-fx
  ::click-globe
  (fn [{:keys [db]} [_ point]]
-   (let [model-id (get-in db [:place-object :model-id])
-         model-params (get-in db [:placeable-map-objects model-id])
-         id-point (merge point {:id (point-id-hash point)} model-params)
-         point-action {:op :add :objects [id-point]}]
-     {:fx [[:dispatch [::place-objects point-action]]
-           [:dispatch [:app.connection.events/send-message {:type :update-object :content point-action}]]
-           [:dispatch [::finish-place-object]]]})))
+   (let [model-id (get-in db [:place-object :model-id])]
+     (when (and (= :in-progress (get-in db [:place-object :status]))
+                model-id)
+       (let [model-params (get-in db [:placeable-map-objects model-id])
+             id-point (merge point {:id (point-id-hash point)} model-params)
+             point-action {:op :add :objects [id-point]}]
+         {:fx [[:dispatch [::place-objects point-action]]
+               [:dispatch [:is.galt.globo.ui.connection.events/send-message {:type :update-object :content point-action}]]
+               [:dispatch [::finish-place-object]]]})))))
 
 (rf/reg-event-fx
  ::place-objects
  (fn [{:keys [db]} [_ point-action]]
    (println ">>> :is.galt.globo.ui.events/place-objects" point-action)
-   ;; Always update the db set of map-objects (the source of truth)
-   ;; so server-pushed objects are never lost. Emit the side effect
-   ;; that updates globe.gl's customLayerData ONLY when models are
-   ;; ready; otherwise the create-3d-object fallback would render
-   ;; green spheres which three-globe's data-bind-mapper would then
-   ;; cache against that data item's identity and never replace.
-   ;; The buffered objects are flushed onto the globe by
-   ;; ::all-models-ready once the GLTF preloads finish.
-   (let [db' (update-in db [:map-objects] into (:objects point-action))]
+   (let [op (:op point-action)
+         objects (set (:objects point-action))
+         db' (case op
+               :add (update-in db [:map-objects] into objects)
+               :remove (update-in db [:map-objects] set/difference objects)
+               db)]
      (if (get-in db [:models-ready?])
        {:db db'
         :fx [[::update-map-objects point-action]]}
@@ -170,5 +169,5 @@
   (fn [db [_ {:keys [lat lng]}]]
     (let [uid (get-in db [:connection :user-id])]
       (-> db
-          (assoc-in [:connection :users-online uid :location] {:lat lat :lng lng})
+          (assoc-in [:users uid :location] {:lat lat :lng lng})
           (assoc-in [:ui :picking-location?] false)))))

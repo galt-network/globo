@@ -87,7 +87,7 @@
 (defn create-3d-object
   [d]
   (println ">>> create-3d-object" d)
-  (let [model-key (keyword (or (j/get d :model-id) :carrot))
+  (let [model-key (or (j/get d :model-id) "carrot")
         _ (println ">>> create-3d-object MODEL-KEY" model-key)
         base (get @model-cache model-key)]
     (if base
