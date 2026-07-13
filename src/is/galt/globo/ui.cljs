@@ -31,7 +31,7 @@
                        :users-online #{} ; A set of user-ids that are online
                        }
           :ui {:active-panel :users}
-          :messages (list)
+          :messages []
           :map-objects #{}
           :placeable-map-objects (reduce (fn [acc c] (assoc acc (:model-id c) c)) {} map-objects/config)
           :place-object nil ; A map to track the user placing an object on the map

@@ -104,7 +104,7 @@
 (rf/reg-event-db
   ::receive-new-message
   (fn [db [_ message]]
-    (update db :messages #(conj (vec %) message))))
+    (update db :messages conj message)))
 
 (rf/reg-event-db
   ::send-message-success
