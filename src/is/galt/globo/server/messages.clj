@@ -89,9 +89,9 @@
              :seen-at nil}]
     (swap! storage update :messages conj msg)
     (case type
-      :direct (let [sender-ids (get-in @storage [:user-connections user-id])
-                    recipient-ids (get-in @storage [:user-connections (first target)])
-                    target-ids (set/union (or sender-ids #{}) (or recipient-ids #{}))
+      :direct (let [sender-ids (get-in @storage [:user-connections user-id] #{})
+                    recipient-ids (reduce into #{} (map #(get-in @storage [:user-connections %] #{}) target))
+                    target-ids (set/union sender-ids recipient-ids)
                     channels (vals (select-keys @sse-clients target-ids))]
                 (send! channels {:type :new-message :content msg}))
       (send! (connections-for :everybody) {:type :new-message :content msg}))))

@@ -1,8 +1,8 @@
 (ns is.galt.globo.ui.presentation.hud
   (:require
-    [is.galt.globo.ui.icons :refer [icon]]
-    [clojure.string :as str]
-    [reagent.core :as r]))
+   [is.galt.globo.ui.icons :refer [icon]]
+   [clojure.string :as str]
+   [reagent.core :as r]))
 
 (defn hud-panel
   [opts & children]
@@ -33,8 +33,9 @@
    {}
    [:div.hud-scroll
     (for [u users]
+      ^{:key (:id u)}
       [panel-row
-       [:div {:key (:id u) :class "level is-mobile p-0"}
+       [:div {:class "level is-mobile p-0"}
         [:div {:class "level-left"}
          [:span {:class "icon-text"}
           [:span {:class "icon"} "🌍"]
@@ -67,7 +68,8 @@
   [hud-panel
    {}
    [:div.hud-scroll
-    (map panel-row ["First" "Second" "Third" "Fourth" "Fifth" "Sixth"])]])
+    (for [s ["First" "Second" "Third" "Fourth" "Fifth" "Sixth"]]
+      ^{:key s} [panel-row s])]])
 
 (defn messages-view
   "Form-3 component using r/with-let so it can be called as a plain
@@ -115,9 +117,9 @@
   [status]
   [:div.hud-status-dot
    {:class (case status
-             :online       "is-online"
+             :online "is-online"
              :reconnecting "is-reconnecting"
-             :offline      "is-offline"
+             :offline "is-offline"
              "is-offline")}])
 
 (defn settings-button
@@ -125,8 +127,8 @@
    status dot in the HUD top bar."
   [{:keys [settings-open? set-settings-open]}]
   [:button.button.is-small.is-light.is-inverted.ml-2.mb-2
-   {:class    (when settings-open? "is-active")
-    :title    "Settings"
+   {:class (when settings-open? "is-active")
+    :title "Settings"
     :on-click #(set-settings-open (not settings-open?))}
    [icon :settings]])
 
@@ -143,10 +145,10 @@
      [:label.label.has-text-light-80 "Your name"]
      [:div.control
       [:input.input.is-small
-       {:type        "text"
-        :value       (or user-name "")
+       {:type "text"
+        :value (or user-name "")
         :placeholder "Your name"
-        :on-change   #(set-user-name (.. % -target -value))}]]]]
+        :on-change #(set-user-name (.. % -target -value))}]]]]
    [panel-row
     [:div.field
      [:label.label.has-text-light-80 "Your location"]
@@ -190,13 +192,13 @@
                [settings-panel (select-keys opts [:user-name :user-location :picking-location?
                                                   :set-user-name :start-pick-location :cancel-pick-location])]
                (case active-panel
-                 :users    [users-view users-online]
-                 :places   [places-view (select-keys opts [:placeable-map-objects :place-object :favorites :add-favorite :go-to-favorite])]
+                 :users [users-view users-online]
+                 :places [places-view (select-keys opts [:placeable-map-objects :place-object :favorites :add-favorite :go-to-favorite])]
                  :messages [messages-view (select-keys opts [:messages :send-message])]))]
     [hud-details-layout
-     {:header  [hud-details-title-bar (select-keys opts [:close-hud :active-panel :set-active-panel
-                                                          :connection-status :settings-open? :set-settings-open])]
-      :body    body}]))
+     {:header [hud-details-title-bar (select-keys opts [:close-hud :active-panel :set-active-panel
+                                                        :connection-status :settings-open? :set-settings-open])]
+      :body body}]))
 
 (defn hud-desktop-column
   [contents]
@@ -217,17 +219,17 @@
   [{:keys [users-online close-hud connection-status settings-open?] :as opts}]
   (let [body (if settings-open?
                [settings-panel (select-keys opts [:user-name :user-location :picking-location?
-                                                   :set-user-name :start-pick-location :cancel-pick-location])]
+                                                  :set-user-name :start-pick-location :cancel-pick-location])]
                [:div.columns.is-variable.is-2.hud-columns
                 [hud-desktop-column (users-view users-online)]
                 [hud-desktop-column (places-view (select-keys opts [:placeable-map-objects :place-object :favorites :add-favorite :go-to-favorite]))]
                 [hud-desktop-column (messages-view (select-keys opts [:messages :send-message]))]])]
     [hud-details-layout
-     {:header [hud-header {:close-hud          close-hud
-                           :connection-status  connection-status
-                           :settings-open?     settings-open?
-                           :set-settings-open  (:set-settings-open opts)}]
-      :body   body}]))
+     {:header [hud-header {:close-hud close-hud
+                           :connection-status connection-status
+                           :settings-open? settings-open?
+                           :set-settings-open (:set-settings-open opts)}]
+      :body body}]))
 
 (defn hud-details
   [{:keys [mobile?] :as opts}]

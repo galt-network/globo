@@ -1,20 +1,16 @@
 (ns is.galt.globo.server.handlers
   (:require
-    [org.httpkit.server :as hk-server]
-    [cheshire.core :as json]
-    [is.galt.globo.server.sse :as sse]
-    [is.galt.globo.server.messages :as server.messages]
-    [is.galt.globo.server.middleware :as server.middleware]
-    [ring.util.mime-type :as mime]
-    [ring.util.response :as response]))
+   [org.httpkit.server :as hk-server]
+   [cheshire.core :as json]
+   [is.galt.globo.server.sse :as sse]
+   [is.galt.globo.server.messages :as server.messages]
+   [is.galt.globo.server.middleware :as server.middleware]
+   [ring.util.mime-type :as mime]
+   [ring.util.response :as response]))
 
 (defn users-online
   [storage]
-  (map
-    (fn [user-id] (get-in storage [:users user-id]))
-    (keep (fn [[user-id connections]]
-            (when (not (empty? connections)) user-id))
-          (:user-connections storage))))
+  (keep (fn [user-id] (some-> storage (get-in [:users user-id]))) (keep (fn [[user-id connections]] (when (not (empty? connections)) user-id)) (:user-connections storage))))
 
 (defn new-connection-handler
   "Ring handler for GET /map/connection. Opens an SSE connection,
@@ -31,24 +27,24 @@
                user-connections (into #{} (get-in @storage [:user-connections user-id] []))
                process-message (fn [message]
                                  (server.messages/process
-                                   {:send! sse/send!
-                                    :storage storage
-                                    :sse-clients sse-clients
-                                    :user-id user-id}
-                                   message))
+                                  {:send! sse/send!
+                                   :storage storage
+                                   :sse-clients sse-clients
+                                   :user-id user-id}
+                                  message))
                connection-closed-message {:type :user-offline
                                           :connection-id connection-id
                                           :content {:id user-id}}]
-            (swap! storage update-in [:users user-id] assoc :id user-id :last-seen-at (java.time.Instant/now))
-            (hk-server/on-close ch
-                                (fn [status]
-                                  (swap! sse-clients dissoc connection-id)
-                                  (swap! storage update-in [:user-connections user-id] disj connection-id)
-                                  (when (empty? (get-in @storage [:user-connections user-id]))
-                                    (process-message connection-closed-message))
-                                  (println "[SSE] disconnected:" {:connection-id connection-id :user-id user-id}
-                                           "reason:" status
-                                           "remaining:" (count @sse-clients))))
+           (swap! storage update-in [:users user-id] assoc :id user-id :last-seen-at (java.time.Instant/now))
+           (hk-server/on-close ch
+                               (fn [status]
+                                 (swap! sse-clients dissoc connection-id)
+                                 (swap! storage update-in [:user-connections user-id] disj connection-id)
+                                 (when (empty? (get-in @storage [:user-connections user-id]))
+                                   (process-message connection-closed-message))
+                                 (println "[SSE] disconnected:" {:connection-id connection-id :user-id user-id}
+                                          "reason:" status
+                                          "remaining:" (count @sse-clients))))
 
            (swap! sse-clients assoc connection-id ch)
            (swap! storage assoc-in [:user-connections user-id] (conj user-connections connection-id))
@@ -62,11 +58,11 @@
                                        "Connection" "keep-alive"
                                        "X-Accel-Buffering" "no"
                                        "Set-Cookie" (server.middleware/set-cookie-header-value user-id)}
-                              :body (str
-                                     (sse/sse-event {:type :connected :content {:connection-id connection-id :user-id user-id}})
-                                     (sse/sse-event {:type :map-objects :content {:objects (get @storage :map-objects)}})
-                                     (sse/sse-event {:type :users-online :content {:users (users-online @storage)}})
-                                     (sse/sse-event {:type :messages :content {:messages (server.messages/latest-messages @storage 20)}}))}
+                             :body (str
+                                    (sse/sse-event {:type :connected :content {:connection-id connection-id :user-id user-id}})
+                                    (sse/sse-event {:type :map-objects :content {:objects (get @storage :map-objects)}})
+                                    (sse/sse-event {:type :users-online :content {:users (users-online @storage)}})
+                                    (sse/sse-event {:type :messages :content {:messages (server.messages/latest-messages @storage 20)}}))}
                             false)
            (process-message {:type :user-online :content (get-in @storage [:users user-id])})))}))))
 
