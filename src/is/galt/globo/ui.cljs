@@ -45,13 +45,13 @@
           :models-ready? false}
      :fx [[:dispatch [:is.galt.globo.ui.connection.events/initialize]]]}))
 
-
 (defn ^:export init
   [^js raw-params]
   (let [params (js->clj raw-params :keywordize-keys true)
         config (select-keys params [:globo-api-base-url])]
     (println "Globo re-frame app init" config)
-    (reset! app-root (rdc/create-root (js/document.getElementById "app")))
+    (when (nil? @app-root)
+      (reset! app-root (rdc/create-root (js/document.getElementById "app"))))
     (rf/dispatch-sync [:is.galt.globo.ui.db/initialize config])
     (render! @app-root {})))
 
