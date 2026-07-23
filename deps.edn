@@ -26,9 +26,11 @@
 
   :nrepl
   {:extra-paths ["dev"]
-   :extra-deps {nrepl/nrepl       {:mvn/version "1.7.0"}
-                cider/cider-nrepl {:mvn/version "0.61.0"}}
-   :main-opts ["-m" "nrepl.cmdline" "--middleware" "[cider.nrepl/cider-middleware]"]}
+   :extra-deps {nrepl/nrepl        {:mvn/version "1.7.0"}
+                cider/cider-nrepl  {:mvn/version "0.61.0"}
+                cider/piggieback    {:mvn/version "0.5.2"}}
+   :main-opts ["-m" "nrepl.cmdline"
+               "--middleware" "[cider.nrepl/cider-middleware,cider.piggieback/wrap-cljs-repl]"]}
 
   :outdated {:replace-deps {olical/depot {:mvn/version "2.4.1"}}
              :main-opts ["-m" "depot.outdated.main"]}}}
