@@ -1,9 +1,9 @@
 (ns user
   (:require
     [clj-reload.core :as reload]
+    [shadow.cljs.devtools.server]
+    [shadow.cljs.devtools.api]
     [is.galt.globo.server]))
-
-(alter-var-root #'*warn-on-reflection* (constantly true))
 
 (reload/init
   {:no-reload '#{user}})
@@ -13,6 +13,12 @@
   []
   (reload/reload))
 
+(defn watch-compile-ui
+  []
+  (shadow.cljs.devtools.server/start!)
+  (shadow.cljs.devtools.api/watch :globo))
+
 (comment
   (is.galt.globo.server/init {:storage nil})
+  (watch-compile-ui)
   (go!))
