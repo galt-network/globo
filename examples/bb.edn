@@ -9,7 +9,7 @@
  :tasks
  {nrepl
   {:requires ([server.main]
-              [user]
+              [dev]
               [babashka.fs :as fs]
               [babashka.nrepl.server :as srv])
    :task (do (srv/start-server! {:host "localhost"
@@ -19,12 +19,52 @@
                  (.addShutdownHook
                   (Thread. (fn [] (fs/delete ".nrepl-port")))))
              (deref (promise)))}
+
+  watch-ui
+  {:doc "Watch shadow-cljs :globo build. Usage: bb watch-ui --mount-path /map"
+   :requires ([babashka.cli :as cli]
+              [babashka.process :as p]
+              [clojure.string :as str])
+   :task (let [{:keys [mount-path]} (cli/parse-opts *command-line-args*
+                                                    {:coerce {:mount-path :string}
+                                                     :exec-args {:mount-path "/map"}})
+               mount-path (if (str/starts-with? mount-path "/")
+                            mount-path
+                            (str "/" mount-path))
+               asset-path (str mount-path "/assets/js")
+               merge-edn (pr-str {:asset-path asset-path})]
+           (println "Watching :globo" {:mount-path mount-path :asset-path asset-path})
+           (-> (p/process ["npx" "shadow-cljs" "watch" "globo"
+                           "--config-merge" merge-edn]
+                          {:dir ".." :inherit true})
+               p/check))}
+
   server
-  {:doc "Starts http-kit server"
+  {:doc "Starts http-kit server. Usage: bb server :port 3000 :mount-path /map"
    :requires ([server.main])
    :task (exec 'server.main/start!)
-   :exec-args {:example :shadow-cljs :port 3000}}}
+   :exec-args {:example :static :port 3000 :mount-path "/map"}}
+
+  dev
+  {:doc "shadow-cljs watch + HTTP server. Usage: bb dev --port 3000 --mount-path /map"
+   :requires ([dev]
+              [babashka.cli :as cli]
+              [clojure.string :as str])
+   :task (let [{:keys [port mount-path]} (cli/parse-opts *command-line-args*
+                                                         {:coerce {:port :long
+                                                                   :mount-path :string}
+                                                          :exec-args {:port 3000
+                                                                      :mount-path "/map"}})
+               mount-path (if (str/starts-with? mount-path "/")
+                            mount-path
+                            (str "/" mount-path))]
+           (dev/start! {:port port :mount-path mount-path})
+           (println "Dev server up"
+                    {:url (str "http://localhost:" port "/")
+                     :mount-path mount-path})
+           (when-let [proc (deref dev/shadow-watch)]
+             (deref proc)))}}
  :profiles
  {:default
   {:init
-   [(require '[user])]}}}
+   [(require '[dev])]}}}

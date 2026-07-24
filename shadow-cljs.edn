@@ -7,12 +7,12 @@
  {:globo
   {:target :browser
    :output-dir "resources/public/js"
-   :asset-path "/js"
+   :asset-path "/map/assets/js"
    :js-options {:js-provider :shadow
                 :resolve { "globe.gl" {:target :global :global "Globe"}}}
-   ; :closure-defines {app.main/GLOBO_API_BASE_URL "/map"}
    :modules {:globo {:entries [is.galt.globo.ui]}}
-   :devtools {}
+   :devtools {:before-load is.galt.globo.ui/stop!
+              :after-load is.galt.globo.ui/start!}
    :dev {:compiler-options
          {:source-map true
           :warnings-as-errors {:ignore #{spec-tools.* cljs.*}
@@ -22,4 +22,3 @@
            day8.re-frame.tracing.trace-enabled? true}}}
    :release {:build-options
              {:ns-aliases {day8.re-frame.tracing day8.re-frame.tracing-stubs}}}}}}
-

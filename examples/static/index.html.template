@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <title>Globo shadow-cljs example</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css">
-    <link rel="stylesheet" href="/map/assets/css/main.css">
+    <link rel="stylesheet" href="{{mount-path}}/assets/css/main.css">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <script src="https://kit.fontawesome.com/cb70718952.js" crossorigin="anonymous"></script>
     <script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
@@ -12,10 +12,9 @@
   <body>
     <div id="app">
     </div>
-    <script src="/map/assets/js/globo.js"></script>
+    <script src="{{mount-path}}/assets/js/globo.js"></script>
     <script>
-      is.galt.globo.ui.init({"globo-api-base-url": "http://localhost:3000/map"});
+      is.galt.globo.ui.init({"globo-api-base-url": "{{api-base-url}}"});
     </script>
-    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.4/gsap.min.js"></script> -->
   </body>
 </html>

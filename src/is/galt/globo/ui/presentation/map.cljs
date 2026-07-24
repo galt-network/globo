@@ -2,6 +2,7 @@
   (:require
    [reagent.core :as r]
    [re-frame.core :as rf]
+   [re-frame.db :as rf.db]
    [applied-science.js-interop :as j]
    [camel-snake-kebab.core :as csk]
    [is.galt.globo.ui.map-objects :as map-objects]
@@ -80,9 +81,10 @@
 
 ;; Preload models when your app starts (e.g. in init or on user login)
 (defn preload-user-models []
-  (doseq [{:keys [model-id path]} map-objects/config]
-    (load-gltf! path model-id #(println "Model loaded" [model-id path])))
-  )
+  (let [assets-base (get-in @rf.db/app-db [:config :assets-base-url] "")]
+    (doseq [{:keys [model-id path]} map-objects/config]
+      (let [url (str assets-base "/" path)]
+        (load-gltf! url model-id #(println "Model loaded" [model-id url]))))))
 
 (defn create-3d-object
   [d]
