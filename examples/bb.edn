@@ -8,8 +8,8 @@
         lambdaisland/uri {:mvn/version "1.19.155"}}
  :tasks
  {nrepl
-  {:requires ([server.main]
-              [dev]
+  {:requires ([user]
+              [server.main]
               [babashka.fs :as fs]
               [babashka.nrepl.server :as srv])
    :task (do (srv/start-server! {:host "localhost"
