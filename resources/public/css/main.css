@@ -16,6 +16,10 @@ div#globe-container {
   cursor: crosshair;
 }
 
+#globe-container.setting-favorite {
+  cursor: crosshair;
+}
+
 #hud {
   position: fixed;
   bottom: 0;

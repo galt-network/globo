@@ -47,15 +47,40 @@
 (rf/reg-event-fx
  ::click-globe
  (fn [{:keys [db]} [_ point]]
-   (let [model-id (get-in db [:place-object :model-id])]
-     (when (and (= :in-progress (get-in db [:place-object :status]))
-                model-id)
-       (let [model-params (get-in db [:placeable-map-objects model-id])
+   (let [action (get-in db [:mouse-action])]
+     (case (:type action)
+       :place-object
+       (let [model-id (:model-id action)
+             model-params (get-in db [:placeable-map-objects model-id])
              id-point (merge point {:id (point-id-hash point)} model-params)
              point-action {:op :add :objects [id-point]}]
-         {:fx [[:dispatch [::place-objects point-action]]
-               [:dispatch [:is.galt.globo.ui.connection.events/send-message {:type :update-object :content point-action}]]
-               [:dispatch [::finish-place-object]]]})))))
+         {:db (assoc-in db [:mouse-action] nil)
+          :fx [[:dispatch [::place-objects point-action]]
+               [:dispatch [:is.galt.globo.ui.connection.events/send-message
+                           {:type :update-object :content point-action}]]]})
+
+       :pick-user-location
+       (let [uid (get-in db [:connection :user-id])]
+         {:db (-> db
+                  (assoc-in [:users uid :location] point)
+                  (assoc-in [:mouse-action] nil))
+          :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
+                           {:type :update-user
+                            :content {:id uid :location point}}]]]})
+
+        :set-favorite
+        (let [index (:index action)
+              existing (get-in db [:favorites index] {:label "" :lat nil :lng nil})
+              partial {:lat (:lat point) :lng (:lng point)}
+              fav' (merge existing partial)]
+          {:db (-> db
+                   (assoc-in [:favorites index] fav')
+                   (assoc-in [:mouse-action] nil))
+           :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
+                            {:type :update-favorite
+                             :content {:index index :partial partial}}]]]})
+
+       {:db db}))))
 
 (rf/reg-event-fx
  ::place-objects
@@ -108,66 +133,68 @@
    (assoc-in db [:hud-open?] open?)))
 
 (rf/reg-event-db
- ::start-place-object
- (fn [db [_ o]]
-   (println ">>> ::start-place-object" o)
-   (assoc-in db [:place-object] {:status :in-progress :model-id o})))
+  ::set-mouse-action
+  (fn [db [_ action]]
+   (assoc-in db [:mouse-action] action)))
 
 (rf/reg-event-db
- ::cancel-place-object
- (fn [db [_ o]]
-   (println ">>> ::cancel-place-object" o)
-   (assoc-in db [:place-object :status] :cancelled)))
+  ::clear-mouse-action
+  (fn [db _]
+   (assoc-in db [:mouse-action] nil)))
 
-(rf/reg-event-db
- ::finish-place-object
- (fn [db [_ o]]
-   (println ">>> ::finish-place-object" o)
-   (assoc-in db [:place-object] nil)))
+(rf/reg-fx
+  ::focus-globe
+  (fn [coords]
+   (when-let [g @ui.map/globe-instance]
+     (j/call g :pointOfView
+             (clj->js (merge coords {:altitude 1.5}))))))
+
+(rf/reg-event-fx
+ ::go-to-favorite
+ (fn [{:keys [db]} [_ index]]
+   (let [fav (get-in db [:favorites index])
+         loc (when (and (:lat fav) (:lng fav))
+               (select-keys fav [:lat :lng]))]
+     (when loc
+       {:fx [[::focus-globe loc]]}))))
+
+(rf/reg-event-fx
+ ::rename-favorite
+ (fn [{:keys [db]} [_ index new-name]]
+   (let [fav' (assoc (get-in db [:favorites index]) :label new-name)]
+     {:db (assoc-in db [:favorites index] fav')
+      :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
+                       {:type :update-favorite
+                        :content {:index index :partial {:label new-name}}}]]]})))
+
+(rf/reg-event-fx
+ ::add-favorite
+ (fn [{:keys [db]} _]
+   {:fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
+                    {:type :add-favorite}]]]}))
 
 (rf/reg-event-db
   ::set-system-state
   (fn [db [_ k v]]
-    (assoc-in db [:system-state k] v)))
+   (assoc-in db [:system-state k] v)))
 
 (rf/reg-event-db
   ::set-active-panel
   (fn [db [_ active-panel]]
-    (assoc-in db [:ui :active-panel] active-panel)))
+   (assoc-in db [:ui :active-panel] active-panel)))
 
 (rf/reg-event-db
   ::set-settings-open
   (fn [db [_ open?]]
-    (-> db
-        (assoc-in [:ui :settings-open?] open?)
-        ;; leaving settings cancels any in-flight location pick
-        (assoc-in [:ui :picking-location?] (when open? false)))))
+   (assoc-in db [:ui :settings-open?] open?)))
 
 (rf/reg-event-fx
   ::set-user-name
   (fn [{:keys [db]} [_ name]]
-    (let [user-id (get-in db [:connection :user-id])]
-      (println ">>> ::ui.events/set-user-name" {:name name :uid user-id})
-      (if user-id
-        {:db (assoc-in db [:users user-id :name] name)
-         :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message {:type :update-user
-                                                               :content {:id user-id :name name}}]]]}
-        {:db db}))))
-
-(rf/reg-event-db
-  ::start-pick-location
-  (fn [db _]
-    (assoc-in db [:ui :picking-location?] true)))
-
-(rf/reg-event-db
-  ::cancel-pick-location
-  (fn [db _]
-    (assoc-in db [:ui :picking-location?] false)))
-
-(rf/reg-event-db
-  ::set-user-location
-  (fn [db [_ {:keys [lat lng]}]]
-    (let [uid (get-in db [:connection :user-id])]
-      (-> db
-          (assoc-in [:users uid :location] {:lat lat :lng lng})
-          (assoc-in [:ui :picking-location?] false)))))
+   (let [user-id (get-in db [:connection :user-id])]
+     (println ">>> ::ui.events/set-user-name" {:name name :uid user-id})
+     (if user-id
+       {:db (assoc-in db [:users user-id :name] name)
+        :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message {:type :update-user
+                                                              :content {:id user-id :name name}}]]]}
+       {:db db}))))

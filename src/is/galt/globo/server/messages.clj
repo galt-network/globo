@@ -5,11 +5,52 @@
 
 (defn update-user
   [{:keys [send! storage user-id connections-for]} message]
-  (swap! storage update-in [:users user-id] merge (select-keys (:content message) [:name]))
+  (swap! storage update-in [:users user-id] merge (select-keys (:content message) [:name :location]))
   (send! (connections-for :all-but-sender)
          {:type :update-user
           :user-id user-id
           :content (get-in @storage [:users user-id])}))
+
+(defn default-favorites
+  "Default favorites for a brand-new user. Empty list — the user adds their own."
+  [])
+
+(defn- broadcast-to-user
+  "Send data to all SSE connections for `user-id` (sender + other tabs of the same user)."
+  [send! sse-clients storage user-id data]
+  (let [connection-ids (get-in @storage [:user-connections user-id] #{})
+        channels (vals (select-keys @sse-clients connection-ids))]
+    (send! channels data)))
+
+(defn update-favorite
+  "Merge `partial` into the user's favorite at `index`, then broadcast the
+   merged entry to all of the user's connections so every tab stays in sync."
+  [{:keys [send! sse-clients storage user-id]} message]
+  (let [{:keys [index partial]} (:content message)
+        merged (merge (get-in @storage [:users user-id :favorites index])
+                      partial)]
+    (swap! storage assoc-in [:users user-id :favorites index] merged)
+    (broadcast-to-user send! sse-clients storage user-id
+                       {:type :favorite-updated
+                        :user-id user-id
+                        :content {:index index :favorite merged}})))
+
+(defn add-favorite
+  "Append a server-generated empty favorite for the user and broadcast
+   it to all of the user's connections."
+  [{:keys [send! sse-clients storage user-id]} _message]
+  (let [favorite {:id (str (java.util.UUID/randomUUID))
+                  :label ""
+                  :lat nil
+                  :lng nil}
+        current (vec (get-in @storage [:users user-id :favorites] []))
+        updated (conj current favorite)
+        index (dec (count updated))]
+    (swap! storage assoc-in [:users user-id :favorites] updated)
+    (broadcast-to-user send! sse-clients storage user-id
+                       {:type :favorite-added
+                        :user-id user-id
+                        :content {:index index :favorite favorite}})))
 
 (defn user-offline
   [{:keys [send! storage user-id connections-for]} message]
@@ -104,6 +145,8 @@
     (case (:type message)
       :update-object (update-map-objects deps message)
       :update-user (update-user deps message)
+      :update-favorite (update-favorite deps message)
+      :add-favorite (add-favorite deps message)
       :user-offline (user-offline deps message)
       :user-online (send! (connections-for :everybody) message)
       :broadcast (send! (connections-for :everybody) message)

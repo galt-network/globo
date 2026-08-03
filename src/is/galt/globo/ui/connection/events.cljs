@@ -28,7 +28,9 @@
         :user-online [::user-online msg-content]
         :user-offline [::user-offline msg-content]
         :messages [::receive-initial-messages msg-content]
-        :new-message [::receive-new-message msg-content]))))
+        :new-message [::receive-new-message msg-content]
+        :favorite-added [::favorite-added msg-content]
+        :favorite-updated [::favorite-updated msg-content]))))
 
 (rf/reg-event-fx
   ::initialize
@@ -59,6 +61,22 @@
     (assoc-in db [:users (:id user)] user)))
 
 (rf/reg-event-db
+ ::favorite-added
+ (fn [db [_ {:keys [index favorite]}]]
+   (println ">>> ::favorite-added" {:index index :favorite favorite})
+   (let [current (vec (get-in db [:favorites] []))
+         updated (if (< index (count current))
+                   (assoc current index favorite)
+                   (conj current favorite))]
+     (assoc db :favorites updated))))
+
+(rf/reg-event-db
+ ::favorite-updated
+ (fn [db [_ {:keys [index favorite]}]]
+   (println ">>> ::favorite-updated" {:index index :favorite favorite})
+   (assoc-in db [:favorites index] favorite)))
+
+(rf/reg-event-db
   ::connected
   (fn [db [_ message]]
     (-> db
@@ -72,13 +90,16 @@
     (assoc-in db [:connection :status] :offline)))
 
 (rf/reg-event-db
-  ::users-online
-  (fn [db [_ {:keys [users] :as msg}]]
-    (println ">>> USERS-ONLINE" msg)
-    (-> db
-        (update-in ,,, [:connection :users-online] into (map :id users))
-        (update-in ,,, [:users] merge (reduce (fn [acc u] (assoc acc (:id u) u)) {} users)))
-    ))
+ ::users-online
+ (fn [db [_ {:keys [users] :as msg}]]
+   (println ">>> USERS-ONLINE" msg)
+   (let [users-map (reduce (fn [acc u] (assoc acc (:id u) u)) {} users)
+         self-id (get-in db [:connection :user-id])
+         self-favs (get-in users-map [self-id :favorites])]
+     (cond-> (-> db
+                  (update-in ,,, [:connection :users-online] into (map :id users))
+                  (update-in ,,, [:users] merge users-map))
+       self-favs (assoc :favorites self-favs)))))
 
 (rf/reg-event-db
   ::user-online

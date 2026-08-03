@@ -12,7 +12,6 @@
   (let [open-hud #(rf/dispatch [::ui.events/set-hud-open true])
         close-hud #(rf/dispatch [::ui.events/set-hud-open false])
         users-online @(rf/subscribe [::conn.subs/users-online])
-        place-object #(rf/dispatch [::ui.events/start-place-object %])
         placeable-map-objects @(rf/subscribe [::ui.subs/placeable-map-objects])
         messages @(rf/subscribe [::ui.subs/messages])
         send-message #(rf/dispatch [::ui.events/send-chat-message %])
@@ -22,24 +21,32 @@
         active-panel @(rf/subscribe [::ui.subs/active-panel])
         set-active-panel #(rf/dispatch [::ui.events/set-active-panel %])
         settings-open? @(rf/subscribe [::ui.subs/settings-open?])
-        picking-location? @(rf/subscribe [::ui.subs/picking-location?])
         current-user @(rf/subscribe [::ui.subs/current-user])
         set-settings-open #(rf/dispatch [::ui.events/set-settings-open %])
         set-user-name #(rf/dispatch [::ui.events/set-user-name %])
-        start-pick-location #(rf/dispatch [::ui.events/start-pick-location])
-        cancel-pick-location #(rf/dispatch [::ui.events/cancel-pick-location])
+        set-mouse-action #(rf/dispatch [::ui.events/set-mouse-action %])
+        clear-mouse-action #(rf/dispatch [::ui.events/clear-mouse-action])
+        mouse-action @(rf/subscribe [::ui.subs/mouse-action])
+        favorites @(rf/subscribe [::ui.subs/favorites])
+        go-to-favorite #(rf/dispatch [::ui.events/go-to-favorite %])
+        rename-favorite (fn [slot new-name]
+                          (rf/dispatch [::ui.events/rename-favorite slot new-name]))
+        add-favorite #(rf/dispatch [::ui.events/add-favorite])
         map-classes @(rf/subscribe [::ui.subs/map-classes])
         map-params {:css-classes map-classes
                     :on-globe-click (fn [coords]
-                                      (println ">>> app.ui on-globe-click" coords)
-                                      (if picking-location?
-                                        (rf/dispatch [::ui.events/set-user-location coords])
-                                        (rf/dispatch [::ui.events/click-globe coords])))}
+                                      (rf/dispatch [::ui.events/click-globe coords]))}
         hud-params {:open-hud open-hud
                     :close-hud close-hud
                     :users-online users-online
-                    :place-object place-object
                     :placeable-map-objects placeable-map-objects
+                    :mouse-action mouse-action
+                    :set-mouse-action set-mouse-action
+                    :clear-mouse-action clear-mouse-action
+                    :favorites favorites
+                    :go-to-favorite go-to-favorite
+                    :rename-favorite rename-favorite
+                    :add-favorite add-favorite
                     :messages messages
                     :send-message send-message
                     :open? open?
@@ -51,10 +58,7 @@
                     :set-settings-open set-settings-open
                     :user-name (:name current-user)
                     :user-location (:location current-user)
-                    :picking-location? picking-location?
-                    :set-user-name set-user-name
-                    :start-pick-location start-pick-location
-                    :cancel-pick-location cancel-pick-location}]
+                    :set-user-name set-user-name}]
     [:div {:style {:position "fixed"
                    :inset 0
                    :overflow "hidden"

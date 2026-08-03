@@ -35,7 +35,14 @@
                connection-closed-message {:type :user-offline
                                           :connection-id connection-id
                                           :content {:id user-id}}]
-           (swap! storage update-in [:users user-id] assoc :id user-id :last-seen-at (java.time.Instant/now))
+            (swap! storage update-in [:users user-id]
+                   (fn [u]
+                     (let [u (or u {})]
+                       (assoc u
+                              :id user-id
+                              :last-seen-at (java.time.Instant/now)
+                              :favorites (or (:favorites u)
+                                             (server.messages/default-favorites))))))
            (hk-server/on-close ch
                                (fn [status]
                                  (swap! sse-clients dissoc connection-id)

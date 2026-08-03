@@ -9,23 +9,28 @@
    (get-in db [:hud-open?])))
 
 (rf/reg-sub
- ::place-object
+ ::mouse-action
  (fn [db _]
-   (get-in db [:place-object])))
+   (get-in db [:mouse-action])))
 
 (rf/reg-sub
- ::picking-location?
+ ::favorites
  (fn [db _]
-   (get-in db [:ui :picking-location?])))
+   (get-in db [:favorites])))
+
+(rf/reg-sub
+ ::max-favorite-places
+ (fn [db _]
+   (get-in db [:config :max-favorite-places])))
 
 (rf/reg-sub
  ::map-classes
- :<- [::place-object]
- :<- [::picking-location?]
- (fn [[place-object picking?] _]
+ :<- [::mouse-action]
+ (fn [action _]
    (cond-> []
-     (= (:status place-object) :in-progress) (conj :place-object-in-progress)
-     picking? (conj :picking-location))))
+     (= :place-object (:type action))      (conj :place-object-in-progress)
+     (= :pick-user-location (:type action)) (conj :picking-location)
+     (= :set-favorite (:type action))       (conj :setting-favorite))))
 
 (rf/reg-sub
  ::map-objects

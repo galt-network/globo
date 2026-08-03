@@ -22,10 +22,11 @@
  (fn [{:keys [is-mobile?]} [_ {:keys [globo-api-base-url assets-base-url]}]]
    (let [assets-base-url (or assets-base-url (str globo-api-base-url "/assets"))]
      {:db {:system-state {:is-mobile? is-mobile?}
-           :config {:globo-api-base-url globo-api-base-url
-                    :assets-base-url assets-base-url
-                    :connection-url (str globo-api-base-url "/connection")
-                    :send-message-url (str globo-api-base-url "/send-message")}
+            :config {:globo-api-base-url globo-api-base-url
+                     :assets-base-url assets-base-url
+                     :connection-url (str globo-api-base-url "/connection")
+                     :send-message-url (str globo-api-base-url "/send-message")
+                     :max-favorite-places 3}
            :users {}
            :connection {:status :offline
                         :connection-id nil
@@ -35,7 +36,8 @@
            :messages []
            :map-objects #{}
            :placeable-map-objects (reduce (fn [acc c] (assoc acc (:model-id c) c)) {} map-objects/config)
-           :place-object nil
+           :mouse-action nil
+           :favorites []
            :hud-open? true
            :models-ready? false}
       :fx [[:dispatch [:is.galt.globo.ui.connection.events/initialize]]]})))
