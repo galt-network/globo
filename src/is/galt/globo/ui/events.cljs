@@ -1,25 +1,41 @@
 (ns is.galt.globo.ui.events
+  "Re-frame events for the globo UI: mouse actions, map objects,
+  favorites, chat messages, rings, and mobile detection."
   (:require
-    [is.galt.globo.ui.presentation.map :as ui.map]
-    [applied-science.js-interop :as j]
-    [clojure.set :as set]
-    [re-frame.core :as rf]))
+   [applied-science.js-interop :as j]
+   [clojure.set :as set]
+   [is.galt.globo.ui.presentation.map :as ui.map]
+   [re-frame.core :as rf]))
 
 (defonce mobile-media-query-list
   (.matchMedia js/window "(max-width: 1023px)"))
 
-(defonce setup-mobile-detection
-  (.addEventListener
-    mobile-media-query-list
-    "change"
-    (fn [e]
-      (println ">>> mobile-media-query-list event" {:e e :matches (.-matches e)})
-      (rf/dispatch [::set-system-state :is-mobile? (.-matches e)]))))
+(defonce mobile-listener-setup
+  (delay
+    (.addEventListener
+     mobile-media-query-list
+     "change"
+     (fn [e]
+       (rf/dispatch [::set-system-state :is-mobile? (.-matches e)])))))
+
+(defn setup-mobile-detection!
+  "Register the mobile media-query listener exactly once."
+  []
+  @mobile-listener-setup)
 
 (rf/reg-cofx
-  ::is-mobile?
-  (fn [cofx]
-    (assoc cofx :is-mobile? (.-matches mobile-media-query-list))))
+ ::is-mobile?
+ (fn [cofx]
+   (assoc cofx :is-mobile? (.-matches mobile-media-query-list))))
+
+(rf/reg-cofx
+ ::globe-viewpoint
+ (fn [cofx]
+   (assoc cofx :globe-viewpoint
+          (some-> @ui.map/globe-instance
+                  (j/call :pointOfView)
+                  (js->clj :keywordize-keys true)
+                  (select-keys [:lat :lng :altitude])))))
 
 (rf/reg-fx
  ::update-map-objects
@@ -73,24 +89,23 @@
                            {:type :update-user
                             :content {:id uid :location point}}]]]})
 
-        :set-favorite
-        (let [index (:index action)
-              existing (get-in db [:favorites index] {:label "" :lat nil :lng nil})
-              partial {:lat (:lat point) :lng (:lng point)}
-              fav' (merge existing partial)]
-          {:db (-> db
-                   (assoc-in [:favorites index] fav')
-                   (assoc-in [:mouse-action] nil))
-           :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
-                            {:type :update-favorite
-                             :content {:index index :partial partial}}]]]})
+       :set-favorite
+       (let [index (:index action)
+             existing (get-in db [:favorites index] {:label "" :lat nil :lng nil})
+             partial {:lat (:lat point) :lng (:lng point)}
+             fav' (merge existing partial)]
+         {:db (-> db
+                  (assoc-in [:favorites index] fav')
+                  (assoc-in [:mouse-action] nil))
+          :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
+                           {:type :update-favorite
+                            :content {:index index :partial partial}}]]]})
 
        {:db db}))))
 
 (rf/reg-event-fx
  ::place-objects
  (fn [{:keys [db]} [_ point-action]]
-   (println ">>> :is.galt.globo.ui.events/place-objects" point-action)
    (let [op (:op point-action)
          objects (set (:objects point-action))
          db' (case op
@@ -105,7 +120,6 @@
 (rf/reg-event-fx
  ::all-models-ready
  (fn [{:keys [db]} _]
-   (println ">>> ::all-models-ready; flushing buffered map-objects onto globe")
    ;; Flip the gate and replay every object that was buffered while
    ;; models were still loading. ::place-objects now sees
    ;; :models-ready? true and emits ::update-map-objects for them.
@@ -120,36 +134,32 @@
        {:db db'}))))
 
 (rf/reg-event-fx
-  ::send-chat-message
-  (fn [{:keys [db]} [_ text]]
-    (let [viewport (some-> @ui.map/globe-instance
-                           (j/call :pointOfView)
-                           (js->clj :keywordize-keys true)
-                           (select-keys [:lat :lng :altitude]))]
-      {:fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
-                        {:type :new-message
-                         :content {:text text
-                                   :viewport viewport}}]]]})))
+ ::send-chat-message
+ [(rf/inject-cofx ::globe-viewpoint)]
+ (fn [{:keys [globe-viewpoint]} [_ text]]
+   {:fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
+                     {:type :new-message
+                      :content {:text text
+                                :viewport globe-viewpoint}}]]]}))
 
 (rf/reg-event-db
-  ::set-hud-open
+ ::set-hud-open
  (fn [db [_ open?]]
-   (println ">>> ::set-hud-open?" open?)
    (assoc-in db [:hud-open?] open?)))
 
 (rf/reg-event-db
-  ::set-mouse-action
-  (fn [db [_ action]]
+ ::set-mouse-action
+ (fn [db [_ action]]
    (assoc-in db [:mouse-action] action)))
 
 (rf/reg-event-db
-  ::clear-mouse-action
-  (fn [db _]
+ ::clear-mouse-action
+ (fn [db _]
    (assoc-in db [:mouse-action] nil)))
 
 (rf/reg-fx
-  ::focus-globe
-  (fn [coords]
+ ::focus-globe
+ (fn [coords]
    (when-let [g @ui.map/globe-instance]
      (j/call g :pointOfView
              (clj->js (merge coords {:altitude 1.5}))))))
@@ -170,29 +180,40 @@
                                  :repeatPeriod 800
                                  :duration 3500})]]]}))))
 
+(rf/reg-fx
+ ::ring-timer
+ (fn [{:keys [id duration]}]
+   (when (and duration (pos? duration))
+     (swap! ui.map/ring-timers assoc id
+            (js/setTimeout
+             (fn [] (rf/dispatch [::remove-ring id]))
+             duration)))))
+
+(rf/reg-fx
+ ::clear-ring-timer
+ (fn [ring-id]
+   (when-let [timer (get @ui.map/ring-timers ring-id)]
+     (js/clearTimeout timer)
+     (swap! ui.map/ring-timers dissoc ring-id))))
+
 (rf/reg-event-fx
  ::add-ring
  (fn [{:keys [db]} [_ {:keys [id] :as ring-data}]]
    (let [ring-id (or id (str (random-uuid)))
-         db' (assoc-in db [:rings ring-id] (assoc ring-data :id ring-id))
-         duration (:duration ring-data)]
-     (when (and duration (pos? duration))
-       (swap! ui.map/ring-timers assoc ring-id
-              (js/setTimeout
-               (fn [] (rf/dispatch [::remove-ring ring-id]))
-               duration)))
+         db' (assoc-in db [:rings ring-id] (assoc ring-data :id ring-id))]
      {:db db'
-      :fx [[::sync-rings (:rings db')]]})))
+      :fx (cond-> [[::sync-rings (:rings db')]]
+            (and (:duration ring-data) (pos? (:duration ring-data)))
+            (conj [::ring-timer {:id ring-id
+                                 :duration (:duration ring-data)}]))})))
 
 (rf/reg-event-fx
  ::remove-ring
  (fn [{:keys [db]} [_ ring-id]]
-   (when-let [timer (get @ui.map/ring-timers ring-id)]
-     (js/clearTimeout timer)
-     (swap! ui.map/ring-timers dissoc ring-id))
    (let [db' (update db :rings dissoc ring-id)]
      {:db db'
-      :fx [[::sync-rings (:rings db')]]})))
+      :fx [[::clear-ring-timer ring-id]
+           [::sync-rings (:rings db')]]})))
 
 (rf/reg-event-fx
  ::rename-favorite
@@ -207,30 +228,30 @@
  ::add-favorite
  (fn [{:keys [db]} _]
    {:fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
-                    {:type :add-favorite}]]]}))
+                     {:type :add-favorite}]]]}))
 
 (rf/reg-event-db
-  ::set-system-state
-  (fn [db [_ k v]]
+ ::set-system-state
+ (fn [db [_ k v]]
    (assoc-in db [:system-state k] v)))
 
 (rf/reg-event-db
-  ::set-active-panel
-  (fn [db [_ active-panel]]
+ ::set-active-panel
+ (fn [db [_ active-panel]]
    (assoc-in db [:ui :active-panel] active-panel)))
 
 (rf/reg-event-db
-  ::set-settings-open
-  (fn [db [_ open?]]
+ ::set-settings-open
+ (fn [db [_ open?]]
    (assoc-in db [:ui :settings-open?] open?)))
 
 (rf/reg-event-fx
-  ::set-user-name
-  (fn [{:keys [db]} [_ name]]
+ ::set-user-name
+ (fn [{:keys [db]} [_ name]]
    (let [user-id (get-in db [:connection :user-id])]
-     (println ">>> ::ui.events/set-user-name" {:name name :uid user-id})
      (if user-id
        {:db (assoc-in db [:users user-id :name] name)
-        :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message {:type :update-user
-                                                              :content {:id user-id :name name}}]]]}
+        :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
+                         {:type :update-user
+                          :content {:id user-id :name name}}]]]}
        {:db db}))))

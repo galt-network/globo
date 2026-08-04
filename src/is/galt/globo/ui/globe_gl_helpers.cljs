@@ -1,6 +1,7 @@
 (ns is.galt.globo.ui.globe-gl-helpers
+  "Applies Clojure maps of configuration to globe.gl instances."
   (:require
-    [camel-snake-kebab.core :as csk]))
+   [camel-snake-kebab.core :as csk]))
 
 (defn apply-config!
   "Apply a map of config to an existing Globe instance.

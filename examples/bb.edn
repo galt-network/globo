@@ -43,28 +43,4 @@
   {:doc "Starts http-kit server. Usage: bb server :port 3000 :mount-path /map"
    :requires ([server.main])
    :task (exec 'server.main/start!)
-   :exec-args {:example :static :port 3000 :mount-path "/map"}}
-
-  dev
-  {:doc "shadow-cljs watch + HTTP server. Usage: bb dev --port 3000 --mount-path /map"
-   :requires ([dev]
-              [babashka.cli :as cli]
-              [clojure.string :as str])
-   :task (let [{:keys [port mount-path]} (cli/parse-opts *command-line-args*
-                                                         {:coerce {:port :long
-                                                                   :mount-path :string}
-                                                          :exec-args {:port 3000
-                                                                      :mount-path "/map"}})
-               mount-path (if (str/starts-with? mount-path "/")
-                            mount-path
-                            (str "/" mount-path))]
-           (dev/start! {:port port :mount-path mount-path})
-           (println "Dev server up"
-                    {:url (str "http://localhost:" port "/")
-                     :mount-path mount-path})
-           (when-let [proc (deref dev/shadow-watch)]
-             (deref proc)))}}
- :profiles
- {:default
-  {:init
-   [(require '[dev])]}}}
+   :exec-args {:example :static :port 3000 :mount-path "/map"}}}}

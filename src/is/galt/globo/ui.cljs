@@ -1,19 +1,40 @@
 (ns is.galt.globo.ui
+  "UI entry point for the globo app. Defines the app-db initial schema,
+  creates the React root, and renders the presentation tree."
   (:require
    [is.galt.globo.ui.connection]
-   [is.galt.globo.ui.events :as ui.events]
-   [is.galt.globo.ui.presentation :as ui.presentation]
-   [is.galt.globo.ui.map-objects :as map-objects]
    [is.galt.globo.ui.connection.events]
    [is.galt.globo.ui.connection.subscriptions]
+   [is.galt.globo.ui.events :as ui.events]
+   [is.galt.globo.ui.map-objects :as map-objects]
+   [is.galt.globo.ui.presentation :as ui.presentation]
    [re-frame.core :as rf]
    [reagent.dom.client :as rdc]))
 
 (defonce app-root
   (atom nil))
 
+(def default-db
+  "Initial app-db schema for the globo application."
+  {:system-state {:is-mobile? false}
+   :config {}
+   :users {}
+   :connection {:status :offline
+                :connection-id nil
+                :user-id nil
+                :users-online #{}}
+   :ui {:active-panel :users}
+   :messages []
+   :map-objects #{}
+   :placeable-map-objects {}
+   :mouse-action nil
+   :favorites []
+   :rings {}
+   :hud-open? true
+   :models-ready? false})
+
 (defn render!
-  [container deps]
+  [container]
   (rdc/render container [ui.presentation/present]))
 
 (rf/reg-event-fx
@@ -21,42 +42,33 @@
  [(rf/inject-cofx ::ui.events/is-mobile?)]
  (fn [{:keys [is-mobile?]} [_ {:keys [globo-api-base-url assets-base-url]}]]
    (let [assets-base-url (or assets-base-url (str globo-api-base-url "/assets"))]
-     {:db {:system-state {:is-mobile? is-mobile?}
-            :config {:globo-api-base-url globo-api-base-url
-                     :assets-base-url assets-base-url
-                     :connection-url (str globo-api-base-url "/connection")
-                     :send-message-url (str globo-api-base-url "/send-message")
-                     :max-favorite-places 3}
-           :users {}
-           :connection {:status :offline
-                        :connection-id nil
-                        :user-id nil
-                        :users-online #{}}
-           :ui {:active-panel :users}
-           :messages []
-           :map-objects #{}
-           :placeable-map-objects (reduce (fn [acc c] (assoc acc (:model-id c) c)) {} map-objects/config)
-            :mouse-action nil
-            :favorites []
-            :rings {}
-            :hud-open? true
-            :models-ready? false}
+     {:db (-> default-db
+              (assoc-in [:system-state :is-mobile?] is-mobile?)
+              (assoc :config {:globo-api-base-url globo-api-base-url
+                              :assets-base-url assets-base-url
+                              :connection-url (str globo-api-base-url "/connection")
+                              :send-message-url (str globo-api-base-url "/send-message")
+                              :max-favorite-places 3}
+                     :placeable-map-objects
+                     (reduce (fn [acc c] (assoc acc (:model-id c) c))
+                             {}
+                             map-objects/config)))
       :fx [[:dispatch [:is.galt.globo.ui.connection.events/initialize]]]})))
 
 (defn ^:export init
   [^js raw-params]
   (let [params (js->clj raw-params :keywordize-keys true)
         config (select-keys params [:globo-api-base-url :assets-base-url])]
-    (println "Globo re-frame app init" config)
+    (ui.events/setup-mobile-detection!)
     (when (nil? @app-root)
       (reset! app-root (rdc/create-root (js/document.getElementById "app"))))
     (rf/dispatch-sync [:is.galt.globo.ui.db/initialize config])
-    (render! @app-root {})))
+    (render! @app-root)))
 
 (defn start!
   []
   (rf/clear-subscription-cache!)
-  (render! @app-root {}))
+  (render! @app-root))
 
 (defn stop!
   [])

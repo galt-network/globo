@@ -1,4 +1,6 @@
 (ns is.galt.globo.ui.connection
+  "SSE client for the globo connection endpoint. Parses incoming SSE
+  events and hands them to a callback."
   (:require
    [applied-science.js-interop :as j]
    [clojure.walk :as walk]
@@ -31,5 +33,4 @@
     (.addEventListener es "error" on-error)
     (when-let [old @event-source]
       (.close old))
-    (reset! event-source es)
-    (println ">>> !!!! app.connection initialized!")))
+    (reset! event-source es)))

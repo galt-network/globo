@@ -24,13 +24,18 @@
    (get-in db [:config :max-favorite-places])))
 
 (rf/reg-sub
+ ::assets-base-url
+ (fn [db _]
+   (get-in db [:config :assets-base-url])))
+
+(rf/reg-sub
  ::map-classes
  :<- [::mouse-action]
  (fn [action _]
    (cond-> []
-     (= :place-object (:type action))      (conj :place-object-in-progress)
+     (= :place-object (:type action)) (conj :place-object-in-progress)
      (= :pick-user-location (:type action)) (conj :picking-location)
-     (= :set-favorite (:type action))       (conj :setting-favorite))))
+     (= :set-favorite (:type action)) (conj :setting-favorite))))
 
 (rf/reg-sub
  ::map-objects
@@ -54,7 +59,7 @@
 
 (rf/reg-sub
  ::messages
- (fn [db]
+ (fn [db _]
    (get-in db [:messages])))
 
 (rf/reg-sub

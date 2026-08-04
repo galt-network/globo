@@ -31,40 +31,38 @@ The **library code** lives under `src/is/galt/globo/`. The **example/integration
 
 | File | Purpose |
 |------|---------|
-| `src/is/galt/globo/server.clj` | Public server API. `routes` builds a `clj-simple-router` route table under a configurable `:mount-path`: `GET <mount>/connection`, `POST <mount>/send-message`, `GET <mount>/assets/**`. `create-handler` wraps the routes with a 404 fallback via `router/wrap-routes`. `init` is currently a no-op returning `{:status :ok}`. |
+| `src/is/galt/globo/server.clj` | Public server API. `routes` builds a `clj-simple-router` route table under a configurable `:mount-path`: `GET <mount>/connection`, `POST <mount>/send-message`, `GET <mount>/assets/**`. `create-handler` wraps the routes with a 404 fallback via `router/wrap-routes`. |
 | `src/is/galt/globo/server/handlers.clj` | Ring handlers. `new-connection-handler` (SSE lifecycle, user registration, initial state: `:connected`, `:map-objects`, `:users-online`, last 20 `:messages`). `send-message-handler` (parses JSON body, dispatches to `messages/process`; returns 200 iff the message was sent to >= 1 client, else 404). `assets-handler` (serves `resources/public/**` via classpath `resource-response`; mime map incl. `glb → model/gltf-binary`; empty path → `index.html`). `users-online` = users with non-empty connection sets. |
 | `src/is/galt/globo/server/messages.clj` | Message dispatch (`process`). Handles `:update-object`, `:update-user`, `:update-favorite`, `:add-favorite`, `:user-online`, `:user-offline`, `:broadcast`, `:new-message`. Chat routing: text starting `@username` matching a known user → `:direct` (sender + target), otherwise `:world` (all). `latest-messages` (default limit 20). |
-| `src/is/galt/globo/server/middleware.clj` | Library Ring middleware: `wrap-user-id` (permanent `user-id` UUID cookie; must sit INSIDE `wrap-cookies`), `wrap-error-response`, `wrap-public-files` (root `"public"`), plus `set-cookie-header-value` and `mark-sse-response` helpers for the SSE manual-cookie path (marker key `::sse-response`). |
+| `src/is/galt/globo/server/middleware.clj` | Library Ring middleware: `wrap-user-id` (permanent `user-id` UUID cookie; must sit INSIDE `wrap-cookies`), `wrap-error-response`, `wrap-public-files` (static roots, default `["public"]`; empty path → `index.html`; `Cache-Control: no-cache`), plus `set-cookie-header-value` and `mark-sse-response` helpers for the SSE manual-cookie path (marker key `::sse-response`). |
 | `src/is/galt/globo/server/sse.clj` | SSE formatting (`sse-event`, JSON data, optional `event:` line) and `send!` (takes a seq of http-kit channels + data; returns boolean "sent to anyone"). |
 
 ### Library — UI (ClojureScript)
 
 | File | Purpose |
 |------|---------|
-| `src/is/galt/globo/ui.cljs` | UI entry point. Exported `init` takes a JS object with `:globo-api-base-url` and optional `:assets-base-url` (defaults to `<api-base>/assets`), creates/reuses a React root on `#app`, dispatches `:is.galt.globo.ui.db/initialize` (defines the app-db initial schema), then renders. `start!`/`stop!` for shadow-cljs hot-reload. |
-| `src/is/galt/globo/core.cljs` | Thin core namespace. `create` wraps a globe instance (minimal). |
-| `src/is/galt/globo/ui/events.cljs` | Re-frame events. `::click-globe` dispatches on the current `:mouse-action` type (place object / pick user location / set favorite). Also `::place-objects`, `::all-models-ready` (flush gate), `::send-chat-message`, `::set-hud-open`, `::set-mouse-action`/`::clear-mouse-action`, `::go-to-favorite`, `::rename-favorite`, `::add-favorite`, `::set-user-name`, `::set-active-panel`, `::set-settings-open`, `::set-system-state`; cofx `::is-mobile?`; fxs `::update-map-objects` (globe layer) and `::focus-globe` (flies camera). Helpers `round-to`, `point-id-hash` (stable id `"p_<abs(hash)>"` from coords rounded to 6 decimals). |
-| `src/is/galt/globo/ui/subscriptions.cljs` | Subscriptions: `::hud-open?`, `::mouse-action`, `::favorites`, `::max-favorite-places`, `::map-classes` (derives globe CSS classes from `:mouse-action`), `::map-objects`, `::placeable-map-objects`, `::is-mobile?`, `::active-panel`, `::messages`, `::settings-open?`, `::current-user`. |
+| `src/is/galt/globo/ui.cljs` | UI entry point. Exported `init` takes a JS object with `:globo-api-base-url` and optional `:assets-base-url` (defaults to `<api-base>/assets`), creates/reuses a React root on `#app`, dispatches `::initialize` (seeds app-db from the `default-db` schema + config), then renders. `start!`/`stop!` for shadow-cljs hot-reload. |
+| `src/is/galt/globo/ui/events.cljs` | Re-frame events. `::click-globe` dispatches on the current `:mouse-action` type (place object / pick user location / set favorite). Also `::place-objects`, `::all-models-ready` (flush gate), `::send-chat-message`, `::set-hud-open`, `::set-mouse-action`/`::clear-mouse-action`, `::go-to-favorite`, `::rename-favorite`, `::add-favorite`, `::set-user-name`, `::set-active-panel`, `::set-settings-open`, `::set-system-state`, `::add-ring`/`::remove-ring`/`::sync-rings`; cofx `::globe-viewpoint` (camera lat/lng/altitude, injected into `::send-chat-message`); fxs `::update-map-objects` (globe layer), `::focus-globe` (flies camera), `::ring-timer`/`::clear-ring-timer` (ring animation timeouts, kept out of handlers). Mobile detection is an idempotent `setup-mobile-detection!` (defonce `delay` + `matchMedia`). Helpers `round-to`, `point-id-hash` (stable id `"p_<abs(hash)>"` from coords rounded to 6 decimals). |
+| `src/is/galt/globo/ui/subscriptions.cljs` | Subscriptions: `::hud-open?`, `::mouse-action`, `::favorites`, `::max-favorite-places`, `::assets-base-url`, `::map-classes` (derives globe CSS classes from `:mouse-action`), `::map-objects`, `::placeable-map-objects`, `::is-mobile?`, `::active-panel`, `::messages`, `::settings-open?`, `::current-user`, `::rings`. |
 | `src/is/galt/globo/ui/connection.cljs` | SSE client. `setup-sse-events` opens one `EventSource`, parses JSON (postwalk keywordizes `:type`/`:op`), closes any previous source. |
-| `src/is/galt/globo/ui/connection/events.cljs` | Connection events. `dispatch-sse->re-frame` maps server SSE types to re-frame events (incl. `:favorite-added`, `:favorite-updated`). `::initialize`, `::send-message` (fetch-fx POST with `:connection-id` + `:user-id`), `::update-map-objects` (set-difference sync of server objects), `::users-online` (also syncs self favorites), `::user-online`/`::user-offline`, `::connected`/`::disconnected`, `::receive-initial-messages`/`::receive-new-message`. |
+| `src/is/galt/globo/ui/connection/events.cljs` | Connection events. `dispatch-sse->re-frame` maps server SSE types to re-frame events (incl. `:favorite-added`, `:favorite-updated`; unknown types log a console warning instead of throwing). `::initialize`, `::send-message` (fetch-fx POST with `:connection-id` + `:user-id`), `::update-map-objects` (set-difference sync of server objects), `::users-online` (also syncs self favorites), `::user-online`/`::user-offline`, `::connected`/`::disconnected` (failure also sets `:connection :status` to `:offline`), `::receive-initial-messages`/`::receive-new-message`. |
 | `src/is/galt/globo/ui/connection/subscriptions.cljs` | `::users-online` (resolved user maps), `::status`. |
-| `src/is/galt/globo/ui/presentation.cljs` | Top-level component. Subscribes everything, wires map params (`:css-classes`, `:on-globe-click`) and hud params into `ui.map/present` + `ui.hud/present`. |
+| `src/is/galt/globo/ui/presentation.cljs` | Top-level component. Subscribes `::map-classes`, wires map params (`:css-classes`, `:on-globe-click`) into `ui.map/present`, and renders `ui.hud/present`. HUD components subscribe to their own data (no prop drilling). |
 | `src/is/galt/globo/ui/presentation/map.cljs` | globe.gl integration. Shadow-resolved imports (`["globe.gl" :as Globe]` global, three GLTFLoader/DRACOLoader). Atoms: `globe-instance`, `model-cache`, `layer-data`, `pending-loads`. `load-gltf!` (DRACO decoder from gstatic 1.5.7) — when `pending-loads` hits 0 dispatches `::all-models-ready`. `add-to-layer`/`remove-from-layer`. `create-3d-object` clones the cached scene + sets scalar scale (green-sphere fallback). `custom-three-object-update` positions clones at lat/lng/alt. `dispose-globe!` teardown; `present` uses a ref callback with one-frame deferred Globe construction (avoids Chrome's 16-WebGL-context cap). |
-| `src/is/galt/globo/ui/presentation/hud.cljs` | HUD overlay UI. Panels: users, places (object buttons + favorite rows with rename / set-location-on-globe / go-to), messages chat (auto-scroll). `settings-panel` (name + location picker), `status-dot`, `settings-button`, tabbed mobile vs 3-column desktop layouts, collapsed `hud-summary` bar. Bulma CSS. |
+| `src/is/galt/globo/ui/presentation/hud.cljs` | HUD overlay UI. Panels: users (incl. a Focus button that flies the camera to a user's location), places (object buttons + favorite rows with rename / set-location-on-globe / go-to), messages chat (auto-scroll). `settings-panel` (name + location picker), `status-dot`, `settings-button`, tabbed mobile vs 3-column desktop layouts, collapsed `hud-summary` bar. Bulma CSS. |
 | `src/is/galt/globo/ui/map_objects.cljs` | 3D object config vector. model-ids are **strings**; fields: `:model-id :path :scale :name :icon` and optional `:show-in-summary?`. Entries: carrot, tree, man (mountain_robot), ancap-bug, zombie-small, ancap-flag. |
 | `src/is/galt/globo/ui/globe_gl_helpers.cljs` | `apply-config!` — applies a Clojure map of config to a Globe instance by calling camelCase methods (kebab→camel via camel-snake-kebab). Supports callback composition. |
-| `src/is/galt/globo/ui/icons.cljs` | FontAwesome icon map (`:cancel :settings :pick-location :edit :set-location :add-new`) + `icon` helper with optional text. |
+| `src/is/galt/globo/ui/icons.cljs` | FontAwesome icon map (`:cancel :settings :pick-location :edit :set-location`) + `icon` helper with optional text. |
 
 ### Example / Integration
 
 | File | Purpose |
 |------|---------|
-| `examples/bb.edn` | Babashka project config. Deps: globo via `:local/root ".."`, clj-simple-router, clj-reload, ring-core, ring-logger, lambdaisland/uri, markdown-clj (currently unused). Tasks: `nrepl` (port 1339, writes `.nrepl-port`), `watch-ui` (shadow-cljs `watch globo` from repo root with `--config-merge` asset-path), `server` (starts http-kit; exec-args `:example :static :port 3000 :mount-path "/map"`), `dev` (⚠ references a `dev` namespace that no longer exists — see Dev Workflow note). |
-| `examples/server/src/server/main.clj` | Example Babashka host. `storage`/`sse-clients` atoms, `middleware-stack`, `make-routes` (mounts globo handler at `* <mount>/**` + `GET /` index handler), `index-handler` fills `{{mount-path}}`/`{{api-base-url}}` into `index.html.template`, `normalize-mount-path`, `start!`/`stop!` with `before-ns-unload`/`after-ns-reload` for clj-reload. `example-roots`: `:shadow-cljs`, `:static`, `:scittle`. |
-| `examples/server/src/server/middleware.clj` | Example middleware (mirrors the library middleware, but `wrap-public-files` accepts multiple static roots: `server/public` + example root). |
+| `examples/bb.edn` | Babashka project config. Deps: globo via `:local/root ".."`, clj-simple-router, clj-reload, ring-core, ring-logger, lambdaisland/uri, markdown-clj (currently unused). Tasks: `nrepl` (port 1339, writes `.nrepl-port`), `watch-ui` (shadow-cljs `watch globo` from repo root with `--config-merge` asset-path), `server` (starts http-kit; exec-args `:example :static :port 3000 :mount-path "/map"`). |
+| `examples/server/src/server/main.clj` | Example Babashka host. `storage`/`sse-clients` atoms, `middleware-stack`, `make-routes` (mounts globo handler at `* <mount>/**` + `GET /` index handler), `index-handler` fills `{{mount-path}}`/`{{api-base-url}}` into `index.html.template`, `normalize-mount-path`, `start!`/`stop!` with `before-ns-unload`/`after-ns-reload` for clj-reload. `example-roots`: `:shadow-cljs`, `:static`, `:scittle`. Uses the library middleware (`is.galt.globo.server.middleware`), incl. its multi-root `wrap-public-files`. |
 | `examples/server/dev/user.clj` | Dev REPL namespace `user`: `go!` (clj-reload), `start!`/`stop!` (server.main + shadow-cljs watch via `shadow-watch` atom), `repo-root`. |
 | `dev/user.clj` | Root dev REPL namespace: `go!` (clj-reload), `watch-compile-ui` (shadow devtools server + `watch :globo`). Used via `clojure -M:nrepl` (extra-paths `dev`). |
-| `shadow-cljs.edn` (root) | Canonical UI build. `:globo` → output `resources/public/js`, asset-path `/map/assets/js`, module `globo` entry `is.galt.globo.ui`, nrepl port 3333, `:jvm-opts ["--sun-misc-unsafe-memory-access=allow"]`, devtools before/after-load `stop!`/`start!`, release maps tracing → tracing-stubs. |
+| `shadow-cljs.edn` (root) | Canonical UI build. `:globo` → output `resources/public/js`, asset-path `/map/assets/js`, module `globo` entry `is.galt.globo.ui`, nrepl port 3333, `:jvm-opts ["--sun-misc-unsafe-memory-access=allow"]`, devtools before/after-load `stop!`/`start!`, release maps tracing → tracing-stubs. Plus a `:test` node-test build (`:ns-regexp "-test$"`, autorun) for CLJS tests. `test/` is on the classpath via deps.edn's `:ui` alias (`:extra-paths ["test"]`). |
 | `examples/static/index.html.template` | Host page template with `{{mount-path}}` / `{{api-base-url}}` placeholders; loads Bulma, FontAwesome, globe.gl CDN, `<mount>/assets/js/globo.js`, then `is.galt.globo.ui.init({...})`. |
 | `examples/shadow-cljs/` | **Legacy** example app (own `:app` build, `app.main` entry, closure-define `GLOBO_API_BASE_URL`). Superseded by the root `:globo` build; kept for `bb server --example shadow-cljs` / `npx shadow-cljs watch app`. |
 | `examples/scittle/` | Placeholder example (`scittle.txt` in its public root). |
@@ -99,7 +97,7 @@ The **library code** lives under `src/is/galt/globo/`. The **example/integration
 | `camel-snake-kebab/camel-snake-kebab` | 0.4.3 | Case conversion (kebab-case ↔ camelCase) |
 | `binaryage/devtools` | 1.0.7 | Browser dev tools enhancement |
 
-Other aliases: `:ui-dev` → `day8.re-frame/tracing` 0.6.2 + `day8.re-frame/re-frame-10x` 1.11.0. `:nrepl` → nrepl 1.7.0, cider-nrepl 0.61.0, piggieback 0.5.2; `:main-opts ["-m" "nrepl.cmdline" "--middleware" "[cider.nrepl/cider-middleware,cider.piggieback/wrap-cljs-repl]"]`; extra-paths `dev`. `:outdated` → depot 2.4.1.
+Other aliases: `:ui-dev` → `day8.re-frame/tracing` 0.6.2 + `day8.re-frame/re-frame-10x` 1.11.0. `:nrepl` → nrepl 1.7.0, cider-nrepl 0.61.0, piggieback 0.5.2; `:main-opts ["-m" "nrepl.cmdline" "--middleware" "[cider.nrepl/cider-middleware,cider.piggieback/wrap-cljs-repl]"]`; extra-paths `dev`. `:outdated` → depot 2.4.1. `:test` → cognitect test-runner v0.5.1 (git `dfb30dd`), extra-paths `test`; run via `clojure -M:test`.
 
 ### JavaScript (NPM) — root `package.json`
 
@@ -111,7 +109,7 @@ Other aliases: `:ui-dev` → `day8.re-frame/tracing` 0.6.2 + `day8.re-frame/re-f
 | `gsap` | ^3.15.0 | Animation library (available, currently unused) |
 | `shadow-cljs` | ^3.4.11 | devDependency for the root build |
 
-## App-DB Schema (re-frame, from `ui.cljs` initialize)
+## App-DB Schema (re-frame, from `ui.cljs` `default-db`)
 
 ```clojure
 {:system-state {:is-mobile? boolean}
@@ -136,6 +134,7 @@ Other aliases: `:ui-dev` → `day8.re-frame/tracing` 0.6.2 + `day8.re-frame/re-f
                     | {:type :pick-user-location}
                     | {:type :set-favorite :index int}
  :favorites [{:id uuid-string :label string :lat num-or-nil :lng num-or-nil} ...]
+ :rings {ring-id {:id string :lat num :lng num :duration num-or-nil}}
  :hud-open? true
  :models-ready? false}
 ```
@@ -255,13 +254,16 @@ Conjure port table (`.conjure-repls.lua`): clj 1339, cljs 3333 (shadow build `gl
 (require '[user] :reload)
 (user/go!)                      ; reload changed namespaces
 (user/watch-compile-ui)         ; shadow devtools watch :globo
-(is.galt.globo.server/init {:storage nil})
 ```
 
 ### Testing
 
 ```bash
-clojure -X:test  ; (no test runner configured yet, no test dirs)
+# Clojure server tests (test/is/galt/globo/server/*):
+clojure -M:test
+
+# ClojureScript tests (node-test build, test/is/galt/globo/ui/*):
+npx shadow-cljs compile test
 ```
 
 ### Checking Outdated Dependencies
@@ -272,7 +274,7 @@ clojure -M:outdated
 
 ## Extension Points
 
-1. **Storage**: Replace the in-memory atoms with a `defprotocol Storage` implementation and pass it through `is.galt.globo.server/init` / `create-handler` deps. (Previously tracked in TODO.md, which no longer exists.)
+1. **Storage**: Replace the in-memory atoms with a `defprotocol Storage` implementation and pass it through `create-handler` deps. (Previously tracked in TODO.md, which no longer exists.)
 2. **Transport**: Client transport can be swapped from HTTP+SSE to channels or function callbacks.
 3. **3D models**: Add entries to `map-objects/config` in `ui/map_objects.cljs` (model-ids are strings). Models must be GLB files (DRACO-compressed supported), placed in `resources/public/3d/` (e.g. `scroll.glb`, `snowman.glb` already present but unconfigured). Optional `:show-in-summary?` flag shows the model in the collapsed HUD bar.
 4. **HUD panels**: New tabs/panels via `::set-active-panel` event and corresponding view functions in `hud.cljs` (mobile tabbed + desktop column layouts).
@@ -294,4 +296,4 @@ clojure -M:outdated
 
 ## Known Inconsistencies
 
-- `examples/bb.edn`'s `dev` task requires a `dev` namespace (calls `dev/start!`, `dev/shadow-watch`, and the default profile runs `(require '[dev])`), but `examples/server/dev/dev.clj` was deleted in commit f804301 and replaced by `user.clj` (ns `user`). `bb dev` will currently fail to find the `dev` namespace — use `bb server` + `bb watch-ui`, or the `user` ns functions, instead.
+- (none currently tracked; the previous `examples/bb.edn` `dev` task issue was resolved by removing the broken task and default profile in the refactor.)

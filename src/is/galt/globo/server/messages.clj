@@ -1,26 +1,37 @@
 (ns is.galt.globo.server.messages
+  "Message dispatch for the globo server. process routes incoming messages
+  from clients to handlers that update storage and broadcast SSE events to
+  the right connections."
   (:require
    [clojure.set :as set]
    [clojure.string :as str]))
 
+(def default-favorites
+  "Default favorites for a brand-new user. Empty list - the user adds
+  their own."
+  [])
+
+(defn- channels-for-ids
+  "Resolve the SSE channels for a set of connection-ids."
+  [sse-clients connection-ids]
+  (vals (select-keys @sse-clients connection-ids)))
+
+(defn- broadcast-to-user
+  "Send data to all SSE connections for `user-id` (sender + other tabs of
+  the same user)."
+  [send! sse-clients storage user-id data]
+  (let [connection-ids (get-in @storage [:user-connections user-id] #{})]
+    (send! (channels-for-ids sse-clients connection-ids) data)))
+
 (defn update-user
+  "Merge :name/:location from the message content into the user, then
+  broadcast the updated user map to everyone except the sender."
   [{:keys [send! storage user-id connections-for]} message]
   (swap! storage update-in [:users user-id] merge (select-keys (:content message) [:name :location]))
   (send! (connections-for :all-but-sender)
          {:type :update-user
           :user-id user-id
           :content (get-in @storage [:users user-id])}))
-
-(defn default-favorites
-  "Default favorites for a brand-new user. Empty list — the user adds their own."
-  [])
-
-(defn- broadcast-to-user
-  "Send data to all SSE connections for `user-id` (sender + other tabs of the same user)."
-  [send! sse-clients storage user-id data]
-  (let [connection-ids (get-in @storage [:user-connections user-id] #{})
-        channels (vals (select-keys @sse-clients connection-ids))]
-    (send! channels data)))
 
 (defn update-favorite
   "Merge `partial` into the user's favorite at `index`, then broadcast the
@@ -53,33 +64,39 @@
                         :content {:index index :favorite favorite}})))
 
 (defn user-offline
+  "Broadcast a user-offline event to everyone except the sender when the
+  user has no remaining open connections."
   [{:keys [send! storage user-id connections-for]} message]
   (when (empty? (get-in @storage [:user-connections user-id]))
     (send! (connections-for :all-but-sender) (assoc-in message [:content :id] user-id))))
 
 (defn update-map-objects
+  "Apply the :op (:add | :remove) in the message content to the shared
+  map-objects set, then broadcast the change to everyone except the sender."
   [{:keys [send! storage user-id connections-for]} message]
-  (println ">>> server/messages update-map-objects" message)
   (let [content (:content message)
         update-fn (case (keyword (:op content))
                     :add set/union
                     :remove set/difference
-                    (println ">>> SKIPPED update-map-objects with unrecognized :op" (:op content)))]
-    (when update-fn
-      (let [updated-objects (update-fn (get-in @storage [:map-objects]) (into #{} (:objects content)))
-            message {:type :update-object :content content}]
-        (swap! storage assoc-in [:map-objects] updated-objects)
-        (send! (connections-for :all-but-sender) message)))))
+                    (throw (ex-info "Unrecognized :op"
+                                    {:op (:op content) :message message})))
+        updated-objects (update-fn (get-in @storage [:map-objects])
+                                   (into #{} (:objects content)))
+        message {:type :update-object :content content}]
+    (swap! storage assoc-in [:map-objects] updated-objects)
+    (send! (connections-for :all-but-sender) message)))
 
 (defn connections-for
+  "Resolve the SSE channels for a broadcast target:
+     :everybody      - all open connections
+     :all-but-sender - every open connection except the current user's"
   [{:keys [storage sse-clients user-id]} target]
   (let [everybody (reduce into #{} (vals (get-in @storage [:user-connections])))
         sender (into #{} (get-in @storage [:user-connections user-id]))
         target-ids (case target
                      :everybody everybody
-                     :sender sender
                      :all-but-sender (set/difference everybody sender))]
-    (vals (select-keys @sse-clients target-ids))))
+    (channels-for-ids sse-clients target-ids)))
 
 (defn latest-messages
   "Return up to `limit` most recent messages from storage."
@@ -132,16 +149,18 @@
     (case type
       :direct (let [sender-ids (get-in @storage [:user-connections user-id] #{})
                     recipient-ids (reduce into #{} (map #(get-in @storage [:user-connections %] #{}) target))
-                    target-ids (set/union sender-ids recipient-ids)
-                    channels (vals (select-keys @sse-clients target-ids))]
-                (send! channels {:type :new-message :content msg}))
+                    target-ids (set/union sender-ids recipient-ids)]
+                (send! (channels-for-ids sse-clients target-ids)
+                       {:type :new-message :content msg}))
       (send! (connections-for :everybody) {:type :new-message :content msg}))))
 
 (defn process
+  "Dispatch a client message by :type. Returns the boolean result of the
+  final send (true when the event reached at least one client), or throws
+  ex-info for an unrecognized :type."
   [{:keys [send!] :as params} message]
   (let [connections-for (partial connections-for params)
         deps (assoc params :connections-for connections-for)]
-    (println ">>> messages/process" message)
     (case (:type message)
       :update-object (update-map-objects deps message)
       :update-user (update-user deps message)
@@ -151,4 +170,5 @@
       :user-online (send! (connections-for :everybody) message)
       :broadcast (send! (connections-for :everybody) message)
       :new-message (handle-new-message deps message)
-      (println ">>> SKIPPED message with unrecognized :type" message))))
+      (throw (ex-info "Unrecognized message :type"
+                      {:message message})))))

@@ -1,23 +1,29 @@
 (ns is.galt.globo.server.middleware
-  "Ring middleware for the shadow-cljs example server.
-  Includes static-file serving, error handling, and permanent
-  user-identification cookie assignment."
+  "Ring middleware for the globo library: static-file serving, error
+  handling, and permanent user-identification cookie assignment."
   (:require
    [ring.util.codec :as codec]
    [ring.util.request :as request]
    [ring.util.response :as response]))
 
+(defn- try-serve-file
+  "Try to serve `path` from `root` for GET/HEAD requests. An empty path
+  resolves to index.html. Returns a Ring response or nil."
+  [req root]
+  (when (#{:get :head} (:request-method req))
+    (let [path (subs (codec/url-decode (request/path-info req)) 1)
+          path (if (empty? path) "index.html" path)]
+      (response/file-response path {:root root}))))
+
 (defn wrap-public-files
-  "Serve static files from the public/ directory before falling through
-  to the wrapped handler. / resolves to public/index.html."
-  [handler]
-  (fn [req]
-    (if-let [resp (and (#{:head :get} (:request-method req))
-                       (response/file-response
-                        (subs (codec/url-decode (request/path-info req)) 1)
-                        {:root "public"}))]
-      (assoc-in resp [:headers "Cache-Control"] "no-cache, no-store, must-revalidate")
-      (handler req))))
+  "Serve static files from the given root dirs before falling through to
+  the wrapped handler. / resolves to index.html. Defaults to [\"public\"]."
+  ([handler] (wrap-public-files handler ["public"]))
+  ([handler roots]
+   (fn [req]
+     (if-let [resp (some #(try-serve-file req %) roots)]
+       (assoc-in resp [:headers "Cache-Control"] "no-cache, no-store, must-revalidate")
+       (handler req)))))
 
 (defn wrap-error-response
   [handler]

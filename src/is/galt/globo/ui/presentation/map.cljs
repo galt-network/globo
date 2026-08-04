@@ -1,18 +1,21 @@
 (ns is.galt.globo.ui.presentation.map
+  "globe.gl integration: Globe construction, GLTF model preloading and
+  caching, 3D object placement, rings, and teardown on hot-reload."
   (:require
-   [reagent.core :as r]
-   [re-frame.core :as rf]
-   [re-frame.db :as rf.db]
-   [applied-science.js-interop :as j]
-   [camel-snake-kebab.core :as csk]
-   [is.galt.globo.ui.map-objects :as map-objects]
    ["globe.gl" :as Globe]
    ["three" :as THREE]
-   ["three/examples/jsm/loaders/GLTFLoader.js" :as GLTFLoader]
    ["three/examples/jsm/loaders/DRACOLoader.js" :as DRACOLoader]
-   [is.galt.globo.ui.globe-gl-helpers :refer [apply-config!]]))
+   ["three/examples/jsm/loaders/GLTFLoader.js" :as GLTFLoader]
+   [applied-science.js-interop :as j]
+   [camel-snake-kebab.core :as csk]
+   [is.galt.globo.ui.globe-gl-helpers :refer [apply-config!]]
+   [is.galt.globo.ui.map-objects :as map-objects]
+   [is.galt.globo.ui.subscriptions :as ui.subs]
+   [re-frame.core :as rf]
+   [re-frame.db :as rf.db]
+   [reagent.core :as r]))
 
-(defonce globe-instance (r/atom nil))
+(defonce globe-instance (atom nil))
 (defonce model-cache (atom {}))
 (defonce layer-data (atom {:custom-layer-data (new js/Array)}))
 ;; Number of GLTF loads still outstanding. When this reaches 0 we
@@ -55,10 +58,10 @@
   (let [known-ids (set (keys db-rings))
         by-id (into {} (map (fn [r] [(j/get r :__ring-id) r])) @rings-data)
         js-rings (reduce
-                   (fn [acc id]
-                     (conj acc (or (get by-id id) (ring->js id (get db-rings id)))))
-                   []
-                   (keys db-rings))]
+                  (fn [acc id]
+                    (conj acc (or (get by-id id) (ring->js id (get db-rings id)))))
+                  []
+                  (keys db-rings))]
     (reset! rings-data (clj->js js-rings))
     (when-let [g @globe-instance]
       (j/call g :ringsData @rings-data))))
@@ -110,7 +113,6 @@
               url
               (fn [gltf]
                 (let [scene (j/get gltf :scene)]
-                  ;; Optional: prepare model (shadows, etc.)
                   (swap! model-cache assoc model-key scene)
                   (when on-ready (on-ready scene)))
                 (on-load-complete))
@@ -119,18 +121,17 @@
                 (js/console.error "Failed to load GLTF model" url err)
                 (on-load-complete))))))
 
-;; Preload models when your app starts (e.g. in init or on user login)
-(defn preload-user-models []
-  (let [assets-base (get-in @rf.db/app-db [:config :assets-base-url] "")]
-    (doseq [{:keys [model-id path]} map-objects/config]
-      (let [url (str assets-base "/" path)]
-        (load-gltf! url model-id #(println "Model loaded" [model-id url]))))))
+(defn preload-user-models
+  "Preload every configured GLB model into `model-cache` so placing
+   objects does not hit the green-sphere fallback."
+  [assets-base-url]
+  (doseq [{:keys [model-id path]} map-objects/config]
+    (let [url (str assets-base-url "/" path)]
+      (load-gltf! url model-id nil))))
 
 (defn create-3d-object
   [d]
-  (println ">>> create-3d-object" d)
   (let [model-key (or (j/get d :model-id) "carrot")
-        _ (println ">>> create-3d-object MODEL-KEY" model-key)
         base (get @model-cache model-key)]
     (if base
       ;; Clone so each placed object is independent
@@ -153,9 +154,6 @@
   {:height 600
    :width 800
    :globe-image-url "//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
-   ; :bump-image-url "//unpkg.com/three-globe/example/img/earth-topology.png"
-   ; :background-image-url "//unpkg.com/three-globe/example/img/night-sky.png"
-
    :background-color "#000011"
    :show-atmosphere true
    :atmosphere-altitude "0.2"
@@ -166,14 +164,9 @@
    :ring-altitude "altitude"
    :ring-color "color"
    :on-globe-click (fn [coords]
-                     (println ">>> ui.map on-globe-click" (js->clj coords :keywordize-keys true))
                      (js->clj coords :keywordize-keys true))
-   :custom-three-object (fn [obj]
-                          (println ">>> custom-three-object" obj)
-                          (create-3d-object obj))
-   ; :custom-three-object-update (fn [obj o-data] (println ">>> custom-three-object-update" [obj o-data]))
+   :custom-three-object create-3d-object
    :custom-three-object-update (fn [obj o-data]
-                                 (println ">>> custom-three-object-update" {:obj obj :o-data o-data})
                                  (let [g ^js @globe-instance
                                        lat (j/get o-data :lat)
                                        lng (j/get o-data :lng)
@@ -184,9 +177,8 @@
                                            (.-y coords)
                                            (.-z coords)))
                                  obj)
-   :on-custom-layer-click (fn [o-data event coords]
-                            (println ">>> on-custom-layer-click" [o-data event (clj->js coords :keywordize-keys true)]))
-   :on-custom-layer-hover (fn [obj prev-obj] (println ">>> on-custom-layer-hover" [obj prev-obj]))})
+   :on-custom-layer-click (fn [_ _ _] nil)
+   :on-custom-layer-hover (fn [_ _] nil)})
 
 (defn- dispose-globe!
   "Tear down a Globe instance: stop the render loop, dispose Three.js
@@ -275,15 +267,16 @@
                              ;; detached element.
                              (when (and el (.-parentNode el))
                                (reset! container-ref el)
-                                 (let [globe (new Globe el)]
-                                   (apply-config! globe globe-gl-config app-config)
-                                   (reset! globe-instance globe)
-                                   ;; Re-sync any rings that were in app-db
-                                   ;; before this globe was (re)mounted, so
-                                   ;; they survive hot-reloads.
-                                   (sync-rings-from-db! (get-in @rf.db/app-db [:rings]))
-                                   (resize!)
-                                   (preload-user-models)
+                               (let [globe (new Globe el)]
+                                 (apply-config! globe globe-gl-config app-config)
+                                 (reset! globe-instance globe)
+                                 ;; Re-sync any rings that were in app-db
+                                 ;; before this globe was (re)mounted, so
+                                 ;; they survive hot-reloads.
+                                 (sync-rings-from-db! (get-in @rf.db/app-db [:rings]))
+                                 (resize!)
+                                 (let [assets-base-url @(rf/subscribe [::ui.subs/assets-base-url])]
+                                   (preload-user-models assets-base-url))
                                  (js/window.addEventListener "resize" resize!)
                                  (js/window.addEventListener "orientationchange" resize!)))))))]
     [:div#globe-container {:class css-classes :ref on-ref}]

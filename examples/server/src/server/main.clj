@@ -1,15 +1,17 @@
 (ns server.main
+  "Example Babashka host for the globo library. Provides the storage and
+  sse-clients atoms, a middleware stack, and HTTP server lifecycle."
   (:require
    [clj-simple-router.core :as router]
    [clojure.java.io :as io]
    [clojure.string :as str]
+   [is.galt.globo.server :as globo.server]
+   [is.galt.globo.server.middleware :as middleware]
    [org.httpkit.server :as hk-server]
    [ring.logger :as logger]
    [ring.middleware.content-type :as content-type]
    [ring.middleware.cookies :as cookie]
-   [ring.middleware.params]
-   [is.galt.globo.server :as globo.server]
-   [server.middleware :as middleware]))
+   [ring.middleware.params]))
 
 (def empty-storage
   {:users {}
