@@ -30,6 +30,7 @@
    :mouse-action nil
    :favorites []
    :rings {}
+   :message-arcs {}
    :hud-open? true
    :models-ready? false})
 

@@ -1,9 +1,10 @@
 (ns is.galt.globo.ui.events
   "Re-frame events for the globo UI: mouse actions, map objects,
-  favorites, chat messages, rings, and mobile detection."
+  favorites, chat messages, message arcs, rings, and mobile detection."
   (:require
    [applied-science.js-interop :as j]
    [clojure.set :as set]
+   [is.galt.globo.ui.message-arcs :as message-arcs]
    [is.galt.globo.ui.presentation.map :as ui.map]
    [re-frame.core :as rf]))
 
@@ -136,11 +137,19 @@
 (rf/reg-event-fx
  ::send-chat-message
  [(rf/inject-cofx ::globe-viewpoint)]
- (fn [{:keys [globe-viewpoint]} [_ text]]
-   {:fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
-                     {:type :new-message
-                      :content {:text text
-                                :viewport globe-viewpoint}}]]]}))
+ (fn [{:keys [db globe-viewpoint]} [_ text]]
+   (let [self-id (get-in db [:connection :user-id])
+         users (get db :users)
+         online-users (select-keys users (get-in db [:connection :users-online]))
+         origin (message-arcs/origin-location (get-in db [:users self-id])
+                                              globe-viewpoint)
+         endpoints (message-arcs/endpoints-for-send text self-id users online-users)]
+     {:fx (cond-> [[:dispatch [:is.galt.globo.ui.connection.events/send-message
+                               {:type :new-message
+                                :content {:text text
+                                          :viewport globe-viewpoint}}]]]
+            (and origin (seq endpoints))
+            (conj [:dispatch [::show-message-arcs origin endpoints]]))})))
 
 (rf/reg-event-db
  ::set-hud-open
@@ -206,6 +215,90 @@
             (and (:duration ring-data) (pos? (:duration ring-data)))
             (conj [::ring-timer {:id ring-id
                                  :duration (:duration ring-data)}]))})))
+
+;; Message arcs: transient globe.gl arcs + endpoint ripple rings shown
+;; when a chat message is sent (or received). Arc dash flight is
+;; arc-flight-ms; arcs are removed after arc-duration-ms.
+(def arc-duration-ms 3000)
+(def arc-flight-ms 1500)
+(def arc-ring-duration-ms 800)
+(def arc-ring-color "#00bcd4")
+(def max-message-arcs 20)
+
+(rf/reg-fx
+ ::sync-arcs
+ (fn [db-arcs]
+   (ui.map/sync-arcs-from-db! db-arcs)))
+
+(rf/reg-fx
+ ::arc-timer
+ (fn [{:keys [id duration]}]
+   (when (and duration (pos? duration))
+     (swap! ui.map/arc-timers assoc id
+            (js/setTimeout
+             (fn [] (rf/dispatch [::remove-message-arc id]))
+             duration)))))
+
+(rf/reg-fx
+ ::clear-arc-timer
+ (fn [arc-id]
+   (when-let [timer (get @ui.map/arc-timers arc-id)]
+     (js/clearTimeout timer)
+     (swap! ui.map/arc-timers dissoc arc-id))))
+
+(rf/reg-fx
+ ::schedule-dispatch
+ (fn [{:keys [delay event]}]
+   (js/setTimeout #(rf/dispatch event) delay)))
+
+(rf/reg-event-fx
+ ::show-message-arcs
+ (fn [{:keys [db]} [_ origin endpoints]]
+   (let [new-arcs (into {}
+                        (map (fn [endpoint]
+                               [(str (random-uuid))
+                                (message-arcs/arc-data origin endpoint)]))
+                        endpoints)
+         db' (update db :message-arcs
+                     (fn [m]
+                       (let [m (or m {})
+                             merged (into m new-arcs)
+                             overflow (- (count merged) max-message-arcs)]
+                         (if (pos? overflow)
+                           (into {} (drop overflow merged))
+                           merged))))
+         ring-opts {:color arc-ring-color
+                    :maxR 3
+                    :propagationSpeed 2
+                    :repeatPeriod 800
+                    :duration arc-ring-duration-ms}
+         source-ring (merge (select-keys origin [:lat :lng]) ring-opts)
+         target-rings (mapv #(merge (select-keys % [:lat :lng]) ring-opts)
+                            endpoints)]
+     {:db db'
+      :fx (vec (concat
+                [[::sync-arcs (:message-arcs db')]
+                 [:dispatch [::add-ring source-ring]]]
+                (map (fn [[arc-id _]]
+                       [::arc-timer {:id arc-id :duration arc-duration-ms}])
+                     new-arcs)
+                (map (fn [ring]
+                       [::schedule-dispatch {:delay arc-flight-ms
+                                             :event [::add-ring ring]}])
+                     target-rings)))})))
+
+(rf/reg-event-fx
+ ::remove-message-arc
+ (fn [{:keys [db]} [_ arc-id]]
+   (let [db' (update db :message-arcs dissoc arc-id)]
+     {:db db'
+      :fx [[::clear-arc-timer arc-id]
+           [::sync-arcs (:message-arcs db')]]})))
+
+(rf/reg-event-db
+ ::clear-message-arcs
+ (fn [db _]
+   (assoc db :message-arcs {})))
 
 (rf/reg-event-fx
  ::remove-ring

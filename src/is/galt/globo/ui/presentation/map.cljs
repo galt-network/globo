@@ -30,6 +30,11 @@
 ;; the app-db :rings map via sync-rings-from-db!.
 (defonce rings-data (atom (new js/Array)))
 (defonce ring-timers (atom {}))
+;; Message Arcs Layer state: the JS array handed to globe.arcsData, plus
+;; a map of arc-id -> pending auto-removal setTimeout handle. Reconciles
+;; with the app-db :message-arcs map via sync-arcs-from-db!.
+(defonce arcs-data (atom (new js/Array)))
+(defonce arc-timers (atom {}))
 
 (defn- default-ring-params
   "Fill in globe.gl Rings Layer defaults for any field absent from `ring`."
@@ -55,8 +60,7 @@
    animation is not interrupted; new rings are converted and appended;
    removed rings are filtered out. Calls globe.ringsData once if mounted."
   [db-rings]
-  (let [known-ids (set (keys db-rings))
-        by-id (into {} (map (fn [r] [(j/get r :__ring-id) r])) @rings-data)
+  (let [by-id (into {} (map (fn [r] [(j/get r :__ring-id) r])) @rings-data)
         js-rings (reduce
                   (fn [acc id]
                     (conj acc (or (get by-id id) (ring->js id (get db-rings id)))))
@@ -65,6 +69,30 @@
     (reset! rings-data (clj->js js-rings))
     (when-let [g @globe-instance]
       (j/call g :ringsData @rings-data))))
+
+(defn- arc->js
+  "Convert app-db arc data into a globe.gl arc JS object, tagged with a
+   hidden :__arc-id so sync-arcs-from-db! can reconcile by identity."
+  [id arc]
+  (-> arc
+      (assoc :color "#00bcd4" :__arc-id id)
+      clj->js))
+
+(defn sync-arcs-from-db!
+  "Reconcile the globe-side arcs JS array with the app-db :message-arcs
+   map. Arcs already on the globe keep their JS object identity so the
+   dash animation is not interrupted; new arcs are converted and appended;
+   removed arcs are filtered out. Calls globe.arcsData once if mounted."
+  [db-arcs]
+  (let [by-id (into {} (map (fn [a] [(j/get a :__arc-id) a])) @arcs-data)
+        js-arcs (reduce
+                 (fn [acc id]
+                   (conj acc (or (get by-id id) (arc->js id (get db-arcs id)))))
+                 []
+                 (keys db-arcs))]
+    (reset! arcs-data (clj->js js-arcs))
+    (when-let [g @globe-instance]
+      (j/call g :arcsData @arcs-data))))
 
 (defn add-to-layer
   [layer-key obj]
@@ -163,6 +191,12 @@
    :ring-repeat-period "repeatPeriod"
    :ring-altitude "altitude"
    :ring-color "color"
+   :arc-color "color"
+   :arc-dash-length 0.35
+   :arc-dash-gap 4
+   :arc-dash-initial-gap 1
+   :arc-dash-animate-time 1500
+   :arcs-transition-duration 0
    :on-globe-click (fn [coords]
                      (js->clj coords :keywordize-keys true))
    :custom-three-object create-3d-object
@@ -227,7 +261,16 @@
       (js/clearTimeout t))
     (reset! ring-timers {})
     (reset! rings-data (new js/Array))
-    ;; 5. Null out the global handle
+    ;; 5. Clear pending arc auto-removal timers and reset the arc layer.
+    ;; Arcs are transient (3s) effects, not re-synced on remount; drop
+    ;; any stale app-db :message-arcs entries so they don't replay when
+    ;; the next ::show-message-arcs syncs against the db.
+    (doseq [[_ t] @arc-timers]
+      (js/clearTimeout t))
+    (reset! arc-timers {})
+    (reset! arcs-data (new js/Array))
+    (rf/dispatch [:is.galt.globo.ui.events/clear-message-arcs])
+    ;; 6. Null out the global handle
     (reset! globe-instance nil)))
 
 (defn present

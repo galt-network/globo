@@ -3,6 +3,7 @@
   (:require
    [clojure.set :as set]
    [is.galt.globo.ui.connection :as ui.connection]
+   [is.galt.globo.ui.message-arcs :as message-arcs]
    [re-frame.core :as rf]))
 
 (defn- log-success
@@ -117,10 +118,23 @@
  (fn [db [_ {:keys [messages]}]]
    (assoc db :messages (vec messages))))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::receive-new-message
- (fn [db [_ message]]
-   (update db :messages conj message)))
+ [(rf/inject-cofx :is.galt.globo.ui.events/globe-viewpoint)]
+ (fn [{:keys [db globe-viewpoint]} [_ message]]
+   (let [db' (update db :messages conj message)
+         author-id (get-in message [:author :id])
+         self-id (get-in db [:connection :user-id])
+         origin (when-not (= author-id self-id)
+                  (message-arcs/origin-location
+                   (get-in db [:users author-id]) nil))
+         endpoint (message-arcs/origin-location
+                   (get-in db [:users self-id]) globe-viewpoint)]
+     (cond-> {:db db'}
+       (and origin endpoint)
+       (assoc :fx [[:dispatch
+                    [:is.galt.globo.ui.events/show-message-arcs
+                     origin [endpoint]]]])))))
 
 (rf/reg-event-db
  ::send-message-success
