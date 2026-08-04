@@ -22,6 +22,46 @@
 ;; in `present`, so @globe-instance is non-nil by the time any load
 ;; completes.
 (defonce pending-loads (atom 0))
+;; Rings Layer state: the JS array handed to globe.ringsData, plus a map
+;; of ring-id -> pending auto-removal setTimeout handle. Reconciles with
+;; the app-db :rings map via sync-rings-from-db!.
+(defonce rings-data (atom (new js/Array)))
+(defonce ring-timers (atom {}))
+
+(defn- default-ring-params
+  "Fill in globe.gl Rings Layer defaults for any field absent from `ring`."
+  [ring]
+  (merge {:lat 0 :lng 0 :altitude 0.0015 :maxR 3
+          :propagationSpeed 2 :repeatPeriod 1000
+          :color "#ffffaa"}
+         (select-keys ring [:lat :lng :altitude :maxR :propagationSpeed
+                            :repeatPeriod :startRadius :color :resolution])))
+
+(defn- ring->js
+  "Convert app-db ring data into a globe.gl ring JS object, tagged with a
+   hidden :__ring-id so sync-rings-from-db! can reconcile by identity."
+  [id ring-data]
+  (-> ring-data
+      default-ring-params
+      (assoc :__ring-id id)
+      clj->js))
+
+(defn sync-rings-from-db!
+  "Reconcile the globe-side rings JS array with the app-db :rings map.
+   Rings already on the globe keep their JS object identity so their ripple
+   animation is not interrupted; new rings are converted and appended;
+   removed rings are filtered out. Calls globe.ringsData once if mounted."
+  [db-rings]
+  (let [known-ids (set (keys db-rings))
+        by-id (into {} (map (fn [r] [(j/get r :__ring-id) r])) @rings-data)
+        js-rings (reduce
+                   (fn [acc id]
+                     (conj acc (or (get by-id id) (ring->js id (get db-rings id)))))
+                   []
+                   (keys db-rings))]
+    (reset! rings-data (clj->js js-rings))
+    (when-let [g @globe-instance]
+      (j/call g :ringsData @rings-data))))
 
 (defn add-to-layer
   [layer-key obj]
@@ -120,6 +160,11 @@
    :show-atmosphere true
    :atmosphere-altitude "0.2"
    :point-of-view {:lat 20 :lng 0 :altitude 2.2}
+   :ring-max-radius "maxR"
+   :ring-propagation-speed "propagationSpeed"
+   :ring-repeat-period "repeatPeriod"
+   :ring-altitude "altitude"
+   :ring-color "color"
    :on-globe-click (fn [coords]
                      (println ">>> ui.map on-globe-click" (js->clj coords :keywordize-keys true))
                      (js->clj coords :keywordize-keys true))
@@ -184,7 +229,13 @@
         (when (and canvas (.-parentNode ^js canvas))
           (.removeChild ^js (.-parentNode ^js canvas) canvas)))
       (catch :default _))
-    ;; 4. Null out the global handle
+    ;; 4. Clear pending ring auto-removal timers and reset ring state.
+    ;; Rings live in app-db :rings and are re-synced on the next mount.
+    (doseq [[_ t] @ring-timers]
+      (js/clearTimeout t))
+    (reset! ring-timers {})
+    (reset! rings-data (new js/Array))
+    ;; 5. Null out the global handle
     (reset! globe-instance nil)))
 
 (defn present
@@ -224,11 +275,15 @@
                              ;; detached element.
                              (when (and el (.-parentNode el))
                                (reset! container-ref el)
-                               (let [globe (new Globe el)]
-                                 (apply-config! globe globe-gl-config app-config)
-                                 (reset! globe-instance globe)
-                                 (resize!)
-                                 (preload-user-models)
+                                 (let [globe (new Globe el)]
+                                   (apply-config! globe globe-gl-config app-config)
+                                   (reset! globe-instance globe)
+                                   ;; Re-sync any rings that were in app-db
+                                   ;; before this globe was (re)mounted, so
+                                   ;; they survive hot-reloads.
+                                   (sync-rings-from-db! (get-in @rf.db/app-db [:rings]))
+                                   (resize!)
+                                   (preload-user-models)
                                  (js/window.addEventListener "resize" resize!)
                                  (js/window.addEventListener "orientationchange" resize!)))))))]
     [:div#globe-container {:class css-classes :ref on-ref}]

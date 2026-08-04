@@ -36,10 +36,11 @@
            :messages []
            :map-objects #{}
            :placeable-map-objects (reduce (fn [acc c] (assoc acc (:model-id c) c)) {} map-objects/config)
-           :mouse-action nil
-           :favorites []
-           :hud-open? true
-           :models-ready? false}
+            :mouse-action nil
+            :favorites []
+            :rings {}
+            :hud-open? true
+            :models-ready? false}
       :fx [[:dispatch [:is.galt.globo.ui.connection.events/initialize]]]})))
 
 (defn ^:export init

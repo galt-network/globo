@@ -28,6 +28,11 @@
      :add (doseq [p objects] (ui.map/add-to-layer :custom-layer-data (clj->js p)))
      :remove (doseq [p objects] (ui.map/remove-from-layer :custom-layer-data (clj->js p))))))
 
+(rf/reg-fx
+ ::sync-rings
+ (fn [db-rings]
+   (ui.map/sync-rings-from-db! db-rings)))
+
 (defn round-to
   "Round a number to `decimals` decimal places."
   [n decimals]
@@ -156,7 +161,38 @@
          loc (when (and (:lat fav) (:lng fav))
                (select-keys fav [:lat :lng]))]
      (when loc
-       {:fx [[::focus-globe loc]]}))))
+       {:fx [[::focus-globe loc]
+             [:dispatch [::add-ring
+                         (merge loc
+                                {:color "#ffcc00"
+                                 :maxR 3
+                                 :propagationSpeed 2
+                                 :repeatPeriod 800
+                                 :duration 3500})]]]}))))
+
+(rf/reg-event-fx
+ ::add-ring
+ (fn [{:keys [db]} [_ {:keys [id] :as ring-data}]]
+   (let [ring-id (or id (str (random-uuid)))
+         db' (assoc-in db [:rings ring-id] (assoc ring-data :id ring-id))
+         duration (:duration ring-data)]
+     (when (and duration (pos? duration))
+       (swap! ui.map/ring-timers assoc ring-id
+              (js/setTimeout
+               (fn [] (rf/dispatch [::remove-ring ring-id]))
+               duration)))
+     {:db db'
+      :fx [[::sync-rings (:rings db')]]})))
+
+(rf/reg-event-fx
+ ::remove-ring
+ (fn [{:keys [db]} [_ ring-id]]
+   (when-let [timer (get @ui.map/ring-timers ring-id)]
+     (js/clearTimeout timer)
+     (swap! ui.map/ring-timers dissoc ring-id))
+   (let [db' (update db :rings dissoc ring-id)]
+     {:db db'
+      :fx [[::sync-rings (:rings db')]]})))
 
 (rf/reg-event-fx
  ::rename-favorite

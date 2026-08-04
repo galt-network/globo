@@ -67,3 +67,8 @@
  (fn [db _]
    (let [user-id (get-in db [:connection :user-id])]
      (get-in db [:users user-id]))))
+
+(rf/reg-sub
+ ::rings
+ (fn [db _]
+   (vals (get-in db [:rings]))))
