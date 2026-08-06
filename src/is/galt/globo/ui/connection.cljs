@@ -33,4 +33,5 @@
     (.addEventListener es "error" on-error)
     (when-let [old @event-source]
       (.close old))
-    (reset! event-source es)))
+    (reset! event-source es)
+    nil))

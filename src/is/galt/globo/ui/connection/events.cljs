@@ -45,7 +45,8 @@
      :on-open #(js/console.log "SSE connection open")
      :on-error (fn [_]
                  (rf/dispatch [:is.galt.globo.ui.connection.events/disconnected]))
-     :on-message dispatch-sse->re-frame})))
+     :on-message dispatch-sse->re-frame})
+   {}))
 
 (rf/reg-event-fx
  ::update-map-objects

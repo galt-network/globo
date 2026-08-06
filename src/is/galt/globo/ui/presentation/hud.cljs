@@ -238,7 +238,8 @@
    status: :online | :reconnecting | :offline"
   [status]
   [:div.hud-status-dot
-   {:class (case status
+   {:title (str/capitalize (or (name status) "offline"))
+    :class (case status
              :online "is-online"
              :reconnecting "is-reconnecting"
              :offline "is-offline"
