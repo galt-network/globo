@@ -1,89 +1,156 @@
 (ns is.galt.globo.server.messages-test
-  (:require
-   [clojure.test :refer [deftest is testing]]
-   [is.galt.globo.server.messages :as messages]))
+  (:require [clojure.test :refer [deftest is testing]]
+            [cheshire.core :as json]
+            [clojure.walk :as walk]
+            [is.galt.globo.protocols :as protocols]
+            [is.galt.globo.server :as globo]
+            [is.galt.globo.server.handlers :as handlers]
+            [is.galt.globo.server.messages :as messages]
+            [is.galt.globo.server.storage :as storage]))
 
-(defn- make-send!
-  "Returns a send! fn that records [channels data] calls into `recording`
-  and reports that the event was delivered."
-  [recording]
-  (fn [channels data]
-    (swap! recording conj [channels data])
-    (boolean (seq channels))))
+(defn make-globo
+  "Globo with u1 (Me, conn-1) and u2 (Other, conn-2)."
+  []
+  (let [g (globo/create-globo)]
+    (handlers/register-user! g "u1")
+    (handlers/register-user! g "u2")
+    (protocols/update-user! (:storage g) "u1" #(assoc % :name "Me"))
+    (protocols/update-user! (:storage g) "u2" #(assoc % :name "Other"))
+    (protocols/add-user-connection! (:storage g) "u1" "conn-1")
+    (protocols/add-user-connection! (:storage g) "u2" "conn-2")
+    (protocols/add-connection! (:connections g) "conn-1" :channel-1)
+    (protocols/add-connection! (:connections g) "conn-2" :channel-2)
+    g))
 
-(defn- make-deps
-  "Builds a process deps map with a fresh storage atom, a recording send!,
-  and a user registered with one open connection."
-  [user-id]
-  (let [storage (atom {:users {}
-                       :map-objects #{}
-                       :user-connections {}
-                       :messages []})
-        sse-clients (atom {"conn-1" :channel-1 "conn-2" :channel-2})
-        recording (atom [])]
-    (swap! storage assoc-in [:users user-id]
-           {:id user-id :name "Me" :favorites []})
-    (swap! storage assoc-in [:user-connections user-id] #{"conn-1"})
-    {:storage storage
-     :sse-clients sse-clients
-     :recording recording
-     :send! (make-send! recording)}))
+(defn with-recording-send!
+  "Runs f with org.httpkit.server/send! redefined to record [ch data] into sent."
+  [sent f]
+  (with-redefs [org.httpkit.server/send! (fn [ch data & _]
+                                           (swap! sent conj [ch data])
+                                           true)]
+    (f)))
+
+(defn recorded-event
+  "First recorded SSE payload parsed as Clojure data (JSON round-trip
+  loses set-ness, so compare content with seq semantics)."
+  [sent]
+  (-> (second (first @sent)) (subs 6) json/parse-string (walk/keywordize-keys)))
+
+(def valid-object
+  {:id "p1" :lat 1 :lng 2 :model-id "carrot" :scale 10})
 
 (deftest process-test
   (testing "world message broadcasts to everybody"
-    (let [{:keys [storage sse-clients recording send!]} (make-deps "u1")]
-      (swap! storage assoc-in [:users "u2"] {:id "u2" :name "Other"})
-      (swap! storage assoc-in [:user-connections "u2"] #{"conn-2"})
-      (let [result (messages/process
-                    {:send! send! :storage storage :sse-clients sse-clients :user-id "u1"}
-                    {:type :new-message
-                     :content {:text "hello world" :viewport {}}})]
-        (is result)
-        (is (= 1 (count @recording)))
-        (let [[channels message] (first @recording)]
-          (is (= #{:channel-1 :channel-2} (set channels)))
-          (is (= :world (get-in message [:content :type])))))))
-
-  (testing "@username message is direct to sender + target only"
-    (let [{:keys [storage sse-clients recording send!]} (make-deps "u1")]
-      (swap! storage assoc-in [:users "u2"] {:id "u2" :name "Other"})
-      (swap! storage assoc-in [:user-connections "u2"] #{"conn-2"})
-      (messages/process
-       {:send! send! :storage storage :sse-clients sse-clients :user-id "u1"}
-       {:type :new-message
-        :content {:text "@other hi there" :viewport {}}})
-      (let [[channels message] (first @recording)]
-        (is (= #{:channel-1 :channel-2} (set channels)))
-        (is (= :direct (get-in message [:content :type])))
-        (is (= #{"u2"} (get-in message [:content :target]))))))
-
-  (testing ":update-object :add merges into map-objects and skips sender"
-    (let [{:keys [storage sse-clients recording send!]} (make-deps "u1")]
-      (swap! storage assoc-in [:users "u2"] {:id "u2" :name "Other"})
-      (swap! storage assoc-in [:user-connections "u2"] #{"conn-2"})
-      (let [result (messages/process
-                    {:send! send! :storage storage :sse-clients sse-clients :user-id "u1"}
-                    {:type :update-object
-                     :content {:op :add :objects [{:id "p1" :lat 1 :lng 2}]}})]
-        (is result)
-        (is (= #{{:id "p1" :lat 1 :lng 2}} (:map-objects @storage)))
-        (let [[channels message] (first @recording)]
-          (is (= [:channel-2] channels))
-          (is (= :update-object (:type message)))))))
-
-  (testing "unknown :type throws ex-info"
-    (let [{:keys [storage sse-clients send!]} (make-deps "u1")]
+    (let [g (make-globo) sent (atom [])]
+      (with-recording-send! sent
+        #(is (true? (messages/process {:globo g :user-id "u1"}
+                                      {:type :new-message :content {:text "hello world"}}))))
+      (is (= 2 (count @sent)))
+      (is (= #{:channel-1 :channel-2} (set (map first @sent))))
+      (let [event (recorded-event sent)]
+        (is (= "new-message" (:type event)))
+        (is (= "world" (get-in event [:content :type])))
+        (is (nil? (get-in event [:content :target])))
+        (is (= "hello world" (get-in event [:content :content]))))))
+  (testing "direct message @user goes to sender and target"
+    (let [g (make-globo) sent (atom [])]
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :new-message :content {:text "@other hi there"}}))
+      (is (= #{:channel-1 :channel-2} (set (map first @sent))))
+      (let [event (recorded-event sent)]
+        (is (= "direct" (get-in event [:content :type])))
+        (is (= #{"u2"} (set (get-in event [:content :target])))))))
+  (testing "unknown @recipient falls back to world"
+    (let [g (make-globo) sent (atom [])]
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :new-message :content {:text "@ghost hi"}}))
+      (is (= "world" (get-in (recorded-event sent) [:content :type])))))
+  (testing "update-object :add updates storage and skips sender"
+    (let [g (make-globo) sent (atom [])]
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :update-object :content {:op :add :objects [valid-object]}}))
+      (is (= #{valid-object} (protocols/get-map-objects (:storage g))))
+      (is (= [:channel-2] (vec (map first @sent))))
+      (let [event (recorded-event sent)]
+        (is (= "update-object" (:type event)))
+        (is (= "add" (get-in event [:content :op]))))))
+  (testing "update-object :remove"
+    (let [g (make-globo) sent (atom [])]
+      (protocols/set-map-objects! (:storage g) #{valid-object})
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :update-object :content {:op :remove :objects [valid-object]}}))
+      (is (= #{} (protocols/get-map-objects (:storage g))))
+      (is (= [:channel-2] (vec (map first @sent))))))
+  (testing "update-object with unrecognized :op throws"
+    (let [g (make-globo)]
       (is (thrown? clojure.lang.ExceptionInfo
-                   (messages/process
-                    {:send! send! :storage storage :sse-clients sse-clients :user-id "u1"}
-                    {:type :bogus-type :content {}}))))))
+                   (messages/process {:globo g :user-id "u1"}
+                                     {:type :update-object :content {:op :bogus :objects []}})))))
+  (testing "update-user merges name/location and skips sender"
+    (let [g (make-globo) sent (atom [])]
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :update-user :content {:id "u1" :name "Renamed"}}))
+      (is (= "Renamed" (:name (protocols/get-user (:storage g) "u1"))))
+      (is (= [:channel-2] (vec (map first @sent))))
+      (let [event (recorded-event sent)]
+        (is (= "update-user" (:type event)))
+        (is (= "u1" (:user-id event)))
+        (is (= "Renamed" (get-in event [:content :name]))))))
+  (testing "update-favorite notifies own connections"
+    (let [g (make-globo) sent (atom [])]
+      (protocols/update-user! (:storage g) "u1"
+                              #(assoc % :favorites [{:id "f1" :label "Old" :lat nil :lng nil}]))
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :update-favorite :content {:index 0 :partial {:label "Home"}}}))
+      (is (= [{:id "f1" :label "Home" :lat nil :lng nil}]
+             (protocols/user-favorites (:storage g) "u1")))
+      (is (= [:channel-1] (map first @sent)))
+      (let [event (recorded-event sent)]
+        (is (= "favorite-updated" (:type event)))
+        (is (= 0 (get-in event [:content :index])))
+        (is (= {:id "f1" :label "Home" :lat nil :lng nil}
+               (get-in event [:content :favorite]))))))
+  (testing "add-favorite notifies own connections"
+    (let [g (make-globo) sent (atom [])]
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"} {:type :add-favorite :content {}}))
+      (is (= 1 (count (protocols/user-favorites (:storage g) "u1"))))
+      (is (= [:channel-1] (map first @sent)))
+      (let [event (recorded-event sent)]
+        (is (= "favorite-added" (:type event)))
+        (is (= 0 (get-in event [:content :index])))
+        (is (= "" (get-in event [:content :favorite :label])))
+        (is (string? (get-in event [:content :favorite :id]))))))
+  (testing "user-offline announces when no connections remain"
+    (let [g (make-globo) sent (atom [])]
+      (protocols/remove-user-connection! (:storage g) "u1" "conn-1")
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :user-offline :connection-id "conn-1" :content {:id "u1"}}))
+      (is (= #{:channel-1 :channel-2} (set (map first @sent))))
+      (is (= "u1" (get-in (recorded-event sent) [:content :id])))))
+  (testing "user-offline stays silent while connections remain"
+    (let [g (make-globo) sent (atom [])]
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :user-offline :connection-id "conn-1" :content {:id "u1"}}))
+      (is (empty? @sent))))
+  (testing "unknown :type throws"
+    (let [g (make-globo)]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (messages/process {:globo g :user-id "u1"} {:type :bogus :content {}}))))))
 
 (deftest latest-messages-test
-  (testing "returns up to limit most recent messages"
-    (let [storage {:messages (vec (map (fn [i] {:id i}) (range 25)))}]
-      (is (= 20 (count (messages/latest-messages storage))))
-      (is (= [22 23 24] (map :id (messages/latest-messages storage 3))))
-      (is (= [] (messages/latest-messages {:messages []})))))
-  (testing "returns all messages when fewer than limit"
-    (let [storage {:messages [{:id 1} {:id 2}]}]
-      (is (= [1 2] (map :id (messages/latest-messages storage)))))))
+  (let [s (storage/in-memory-globo-storage)
+        msgs (mapv (fn [i] {:id i}) (range 25))]
+    (doseq [m msgs]
+      (protocols/append-message! s m))
+    (is (= 20 (count (protocols/latest-messages s 20))))
+    (is (= [22 23 24] (map :id (protocols/latest-messages s 3))))
+    (is (= [] (protocols/latest-messages (storage/in-memory-globo-storage) 20)))))

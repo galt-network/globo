@@ -14,28 +14,35 @@
   [result]
   (js/console.error "::send-message FAILURE" result))
 
+(defn sse-type->event
+  "Map a parsed SSE message to its re-frame event vector (or nil when the
+   message type is unknown). Pure — testable without a running re-frame."
+  [{:keys [type content]}]
+  (let [msg-type (keyword type)]
+    (case msg-type
+      :update-user [::update-user content]
+      :update-object [:is.galt.globo.ui.events/place-objects content]
+      :map-objects [::update-map-objects content]
+      :connected [::connected content]
+      :disconnected [::disconnected content]
+      :users-online [::users-online content]
+      :user-online [::user-online content]
+      :user-offline [::user-offline content]
+      :messages [::receive-initial-messages content]
+      :new-message [::receive-new-message content]
+      :favorite-added [::favorite-added content]
+      :favorite-updated [::favorite-updated content]
+      :placeable-map-objects [::update-placeable-map-objects content]
+      :system-notification [::system-notification content]
+      nil)))
+
 (defn dispatch-sse->re-frame
   "Dispatch a parsed SSE message to the matching re-frame event."
   [message]
-  (let [msg-type (keyword (:type message))
-        msg-content (:content message)
-        event (case msg-type
-                :update-user [::update-user msg-content]
-                :update-object [:is.galt.globo.ui.events/place-objects msg-content]
-                :map-objects [::update-map-objects msg-content]
-                :connected [::connected msg-content]
-                :disconnected [::disconnected msg-content]
-                :users-online [::users-online msg-content]
-                :user-online [::user-online msg-content]
-                :user-offline [::user-offline msg-content]
-                :messages [::receive-initial-messages msg-content]
-                :new-message [::receive-new-message msg-content]
-                :favorite-added [::favorite-added msg-content]
-                :favorite-updated [::favorite-updated msg-content]
-                nil)]
+  (let [event (sse-type->event message)]
     (if event
       (rf/dispatch event)
-      (js/console.warn "Unknown SSE message type" msg-type))))
+      (js/console.warn "Unknown SSE message type" (:type message)))))
 
 (rf/reg-event-fx
  ::initialize
@@ -63,6 +70,42 @@
  ::update-user
  (fn [db [_ user]]
    (assoc-in db [:users (:id user)] user)))
+
+(rf/reg-event-fx
+ ::update-placeable-map-objects
+ (fn [{:keys [db]} [_ {:keys [objects]}]]
+   (let [by-model-id (reduce (fn [acc o] (assoc acc (:model-id o) o)) {} objects)]
+     {:db (assoc db :placeable-map-objects by-model-id)
+      :fx [[:is.galt.globo.ui.events/preload-models
+            {:assets-base-url (get-in db [:config :assets-base-url])
+             :placeables objects}]]})))
+
+(def system-notification-dismiss-ms 6000)
+(def max-system-notifications 5)
+
+(rf/reg-event-fx
+ ::system-notification
+ (fn [{:keys [db]} [_ notification]]
+   (let [content (:content notification)
+         entry {:id (str (random-uuid))
+                :message (:message content)
+                :severity (:severity content)
+                :received-at (:sent-at content)}
+         current (get-in db [:system-notifications] [])
+         db' (assoc db :system-notifications
+                    (vec (take max-system-notifications
+                               (conj current entry))))]
+     {:db db'
+      :fx [[:is.galt.globo.ui.events/schedule-dispatch
+            {:delay system-notification-dismiss-ms
+             :event [::dismiss-system-notification (:id entry)]}]]})))
+
+(rf/reg-event-db
+ ::dismiss-system-notification
+ (fn [db [_ id]]
+   (update db :system-notifications
+           (fn [notifications]
+             (vec (remove #(= id (:id %)) notifications))))))
 
 (rf/reg-event-db
  ::favorite-added

@@ -77,3 +77,8 @@
  ::rings
  (fn [db _]
    (vals (get-in db [:rings]))))
+
+(rf/reg-sub
+ ::system-notifications
+ (fn [db _]
+   (get-in db [:system-notifications])))

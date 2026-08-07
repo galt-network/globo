@@ -1,174 +1,139 @@
 (ns is.galt.globo.server.messages
-  "Message dispatch for the globo server. process routes incoming messages
-  from clients to handlers that update storage and broadcast SSE events to
-  the right connections."
+  "Message dispatch. Both browser-originated POSTs and host-originated
+  send-message! calls funnel through `process`, which mutates the
+  GloboStorage and pushes events via publish!. All outbound events are
+  validated by publish! before reaching the browser."
   (:require
    [clojure.set :as set]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [is.galt.globo.protocols :as protocols]
+   [is.galt.globo.server.publish :as publish]))
 
 (def default-favorites
-  "Default favorites for a brand-new user. Empty list - the user adds
-  their own."
+  "Favorites seeded for newly registered users."
   [])
 
-(defn- channels-for-ids
-  "Resolve the SSE channels for a set of connection-ids."
-  [sse-clients connection-ids]
-  (vals (select-keys @sse-clients connection-ids)))
+(defn- user-storage
+  [globo]
+  (:storage globo))
 
-(defn- broadcast-to-user
-  "Send data to all SSE connections for `user-id` (sender + other tabs of
-  the same user)."
-  [send! sse-clients storage user-id data]
-  (let [connection-ids (get-in @storage [:user-connections user-id] #{})]
-    (send! (channels-for-ids sse-clients connection-ids) data)))
+(defn- all-but-sender-ids
+  "Connection-ids of every connected user except `user-id` (explicit set,
+  because publish! itself has no sender context)."
+  [globo user-id]
+  (publish/resolve-target-ids {:globo globo :user-id user-id} :all-but-sender))
 
 (defn update-user
-  "Merge :name/:location from the message content into the user, then
-  broadcast the updated user map to everyone except the sender."
-  [{:keys [send! storage user-id connections-for]} message]
-  (swap! storage update-in [:users user-id] merge (select-keys (:content message) [:name :location]))
-  (send! (connections-for :all-but-sender)
-         {:type :update-user
-          :user-id user-id
-          :content (get-in @storage [:users user-id])}))
+  "Merge :name/:location from the message into the user and broadcast the
+  updated user to everyone except the sender."
+  [{:keys [globo user-id]} {:keys [content]}]
+  (let [storage (user-storage globo)]
+    (protocols/update-user! storage user-id #(merge % (select-keys content [:name :location])))
+    (publish/publish! globo (all-but-sender-ids globo user-id)
+                      {:type :update-user :user-id user-id
+                       :content (protocols/get-user storage user-id)})))
 
 (defn update-favorite
-  "Merge `partial` into the user's favorite at `index`, then broadcast the
-   merged entry to all of the user's connections so every tab stays in sync."
-  [{:keys [send! sse-clients storage user-id]} message]
-  (let [{:keys [index partial]} (:content message)
-        merged (merge (get-in @storage [:users user-id :favorites index])
-                      partial)]
-    (swap! storage assoc-in [:users user-id :favorites index] merged)
-    (broadcast-to-user send! sse-clients storage user-id
-                       {:type :favorite-updated
-                        :user-id user-id
-                        :content {:index index :favorite merged}})))
+  "Merge :partial into the user's favorite at :index and broadcast it to
+  the user's own connections."
+  [{:keys [globo user-id]} {:keys [content]}]
+  (let [storage (user-storage globo)
+        favorite (protocols/update-favorite! storage user-id (:index content) (:partial content))]
+    (publish/publish! globo (protocols/connection-ids-for-user storage user-id)
+                      {:type :favorite-updated :user-id user-id
+                       :content {:index (:index content) :favorite favorite}})))
 
 (defn add-favorite
-  "Append a server-generated empty favorite for the user and broadcast
-   it to all of the user's connections."
-  [{:keys [send! sse-clients storage user-id]} _message]
-  (let [favorite {:id (str (java.util.UUID/randomUUID))
-                  :label ""
-                  :lat nil
-                  :lng nil}
-        current (vec (get-in @storage [:users user-id :favorites] []))
-        updated (conj current favorite)
-        index (dec (count updated))]
-    (swap! storage assoc-in [:users user-id :favorites] updated)
-    (broadcast-to-user send! sse-clients storage user-id
-                       {:type :favorite-added
-                        :user-id user-id
-                        :content {:index index :favorite favorite}})))
+  "Append a fresh favorite for the user and broadcast it to the user's own
+  connections."
+  [{:keys [globo user-id]} _message]
+  (let [storage (user-storage globo)
+        favorite {:id (str (java.util.UUID/randomUUID)) :label "" :lat nil :lng nil}]
+    (protocols/add-favorite! storage user-id favorite)
+    (let [index (dec (count (protocols/user-favorites storage user-id)))]
+      (publish/publish! globo (protocols/connection-ids-for-user storage user-id)
+                        {:type :favorite-added :user-id user-id
+                         :content {:index index :favorite favorite}}))))
 
 (defn user-offline
-  "Broadcast a user-offline event to everyone except the sender when the
-  user has no remaining open connections."
-  [{:keys [send! storage user-id connections-for]} message]
-  (when (empty? (get-in @storage [:user-connections user-id]))
-    (send! (connections-for :all-but-sender) (assoc-in message [:content :id] user-id))))
+  "Broadcast :user-offline to everyone except the sender, but only when the
+  user has no remaining connections."
+  [{:keys [globo user-id]} message]
+  (let [storage (user-storage globo)]
+    (when (empty? (protocols/connection-ids-for-user storage user-id))
+      (publish/publish! globo (all-but-sender-ids globo user-id)
+                        (assoc-in message [:content :id] user-id)))))
 
 (defn update-map-objects
-  "Apply the :op (:add | :remove) in the message content to the shared
-  map-objects set, then broadcast the change to everyone except the sender."
-  [{:keys [send! storage user-id connections-for]} message]
-  (let [content (:content message)
-        update-fn (case (keyword (:op content))
+  "Apply :add/:remove to the shared map-objects set and broadcast the
+  change to everyone except the sender."
+  [{:keys [globo user-id]} {:keys [content]}]
+  (let [storage (user-storage globo)
+        op (keyword (:op content))
+        update-fn (case op
                     :add set/union
                     :remove set/difference
-                    (throw (ex-info "Unrecognized :op"
-                                    {:op (:op content) :message message})))
-        updated-objects (update-fn (get-in @storage [:map-objects])
-                                   (into #{} (:objects content)))
-        message {:type :update-object :content content}]
-    (swap! storage assoc-in [:map-objects] updated-objects)
-    (send! (connections-for :all-but-sender) message)))
+                    (throw (ex-info "Unrecognized :op" {:message content})))
+        updated (update-fn (protocols/get-map-objects storage)
+                           (into #{} (:objects content)))]
+    (protocols/set-map-objects! storage updated)
+    (publish/publish! globo (all-but-sender-ids globo user-id)
+                      {:type :update-object :content content})))
 
-(defn connections-for
-  "Resolve the SSE channels for a broadcast target:
-     :everybody      - all open connections
-     :all-but-sender - every open connection except the current user's"
-  [{:keys [storage sse-clients user-id]} target]
-  (let [everybody (reduce into #{} (vals (get-in @storage [:user-connections])))
-        sender (into #{} (get-in @storage [:user-connections user-id]))
-        target-ids (case target
-                     :everybody everybody
-                     :all-but-sender (set/difference everybody sender))]
-    (channels-for-ids sse-clients target-ids)))
-
-(defn latest-messages
-  "Return up to `limit` most recent messages from storage."
-  [storage & [limit]]
-  (let [msgs (:messages storage)
-        n (min (or limit 20) (count msgs))]
-    (subvec msgs (- (count msgs) n))))
-
-(defn- resolve-recipient-ids
-  "Find user-id whose :name matches the @username prefix (case-insensitive).
-   Returns user-id or nil."
+(defn resolve-recipient-ids
+  "Return the user-ids whose (case-insensitive) name matches `username`."
   [storage username]
-  (some (fn [[uid {:keys [name]}]]
-          (when (and name (= (str/lower-case name) (str/lower-case username)))
-            uid))
-        (:users storage)))
+  (->> (protocols/users-map storage)
+       (keep (fn [[user-id user]]
+               (when (and (:name user)
+                          (= (str/lower-case (:name user)) username))
+                 user-id)))))
 
-(defn- parse-message-type
-  "Check if `text` starts with @username.
-   If it does and the username matches a known user, classify as :direct.
-   Otherwise classify as :world."
+(defn parse-message-type
+  "Chat routing: @username prefix matching a known user -> :direct with the
+  matched user-ids as target, otherwise :world."
   [storage text]
   (if-let [[_ username] (re-find #"^@(\S+)" text)]
-    (if-let [user-id (resolve-recipient-ids storage username)]
-      {:type :direct :target #{user-id}}
-      {:type :world :target nil})
+    (let [ids (resolve-recipient-ids storage (str/lower-case username))]
+      (if (seq ids)
+        {:type :direct :target (set ids)}
+        {:type :world :target nil}))
     {:type :world :target nil}))
 
 (defn handle-new-message
-  "Store a new chat message and route it to the appropriate recipients.
-   :world  -> broadcast to everybody
-   :direct -> send only to sender + targeted user(s)
-   :entity -> broadcast to everybody (entity UI not built yet)"
-  [{:keys [send! storage user-id connections-for sse-clients]} message]
-  (let [content (:content message)
+  "Store a chat message and broadcast it: :direct goes to the sender's and
+  the target users' connections, everything else to everybody."
+  [{:keys [globo user-id]} {:keys [content]}]
+  (let [storage (user-storage globo)
         text (:text content)
-        viewport (:viewport content)
-        user-name (get-in @storage [:users user-id :name])
-        {:keys [type target]} (parse-message-type @storage text)
+        {:keys [type target]} (parse-message-type storage text)
         msg {:id (str (java.util.UUID/randomUUID))
-             :author {:id user-id :name (or user-name "Anonymous")}
-             :type type
-             :target target
-             :content text
-             :viewport viewport
+             :author {:id user-id :name (or (:name (protocols/get-user storage user-id)) "Anonymous")}
+             :type type :target target
+             :content text :viewport (:viewport content)
              :sent-at (str (java.time.Instant/now))
-             :received-at nil
-             :seen-at nil}]
-    (swap! storage update :messages conj msg)
-    (case type
-      :direct (let [sender-ids (get-in @storage [:user-connections user-id] #{})
-                    recipient-ids (reduce into #{} (map #(get-in @storage [:user-connections %] #{}) target))
-                    target-ids (set/union sender-ids recipient-ids)]
-                (send! (channels-for-ids sse-clients target-ids)
-                       {:type :new-message :content msg}))
-      (send! (connections-for :everybody) {:type :new-message :content msg}))))
+             :received-at nil :seen-at nil}
+        event {:type :new-message :content msg}]
+    (protocols/append-message! storage msg)
+    (if (= type :direct)
+      (publish/publish! globo
+                        (into #{} (mapcat #(protocols/connection-ids-for-user storage %)
+                                          (cons user-id (vec target))))
+                        event)
+      (publish/publish! globo :everybody event))))
 
 (defn process
-  "Dispatch a client message by :type. Returns the boolean result of the
-  final send (true when the event reached at least one client), or throws
-  ex-info for an unrecognized :type."
-  [{:keys [send!] :as params} message]
-  (let [connections-for (partial connections-for params)
-        deps (assoc params :connections-for connections-for)]
-    (case (:type message)
-      :update-object (update-map-objects deps message)
-      :update-user (update-user deps message)
-      :update-favorite (update-favorite deps message)
-      :add-favorite (add-favorite deps message)
-      :user-offline (user-offline deps message)
-      :user-online (send! (connections-for :everybody) message)
-      :broadcast (send! (connections-for :everybody) message)
-      :new-message (handle-new-message deps message)
-      (throw (ex-info "Unrecognized message :type"
-                      {:message message})))))
+  "Dispatch an inbound message. Returns the boolean result of the final
+  publish (false when nobody was reached)."
+  [{:keys [globo user-id]} message]
+  (case (:type message)
+    :update-object (update-map-objects {:globo globo :user-id user-id} message)
+    :update-user (update-user {:globo globo :user-id user-id} message)
+    :update-favorite (update-favorite {:globo globo :user-id user-id} message)
+    :add-favorite (add-favorite {:globo globo :user-id user-id} message)
+    :user-offline (user-offline {:globo globo :user-id user-id} message)
+    :user-online (publish/publish! globo :everybody message)
+    :broadcast (publish/publish! globo :everybody message)
+    :system-notification (publish/publish! globo :everybody message)
+    :new-message (handle-new-message {:globo globo :user-id user-id} message)
+    (throw (ex-info "Unrecognized message :type" {:message message}))))

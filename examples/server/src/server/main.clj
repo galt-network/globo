@@ -1,12 +1,15 @@
 (ns server.main
-  "Example Babashka host for the globo library. Provides the storage and
-  sse-clients atoms, a middleware stack, and HTTP server lifecycle."
+  "Example Babashka host for the globo library. Builds a globo component
+  (default in-memory storage/connections wrapped around its own atoms),
+  a middleware stack, and HTTP server lifecycle."
   (:require
    [clj-simple-router.core :as router]
    [clojure.java.io :as io]
    [clojure.string :as str]
    [is.galt.globo.server :as globo.server]
+   [is.galt.globo.server.connections :as connections]
    [is.galt.globo.server.middleware :as middleware]
+   [is.galt.globo.server.storage :as gstorage]
    [org.httpkit.server :as hk-server]
    [ring.logger :as logger]
    [ring.middleware.content-type :as content-type]
@@ -73,13 +76,13 @@
 
 (defn make-routes
   [{:keys [mount-path example-root port] :as deps}]
-  (cond-> {(str "* " mount-path "/**")
-           (globo.server/create-handler
-            (assoc deps
-                   :mount-path mount-path
-                   :storage storage
-                   :sse-clients sse-clients))}
-    example-root (assoc "GET /" (index-handler deps))))
+  (let [globo (globo.server/create-globo
+               {:mount-path mount-path
+                :storage (gstorage/in-memory-globo-storage storage)
+                :connections (connections/in-memory-connection-store sse-clients)})]
+    (cond-> {(str "* " mount-path "/**")
+             (globo.server/create-handler globo)}
+      example-root (assoc "GET /" (index-handler deps)))))
 
 (defn start!
   {:org.babashka/cli {:coerce {:example :keyword :port :int}}}

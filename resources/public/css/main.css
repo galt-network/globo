@@ -172,3 +172,19 @@ div#globe-container {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+.system-notifications {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 24rem;
+}
+
+.system-notifications .notification {
+  margin-bottom: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}

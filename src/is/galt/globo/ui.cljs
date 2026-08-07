@@ -6,7 +6,6 @@
    [is.galt.globo.ui.connection.events]
    [is.galt.globo.ui.connection.subscriptions]
    [is.galt.globo.ui.events :as ui.events]
-   [is.galt.globo.ui.map-objects :as map-objects]
    [is.galt.globo.ui.presentation :as ui.presentation]
    [re-frame.core :as rf]
    [reagent.dom.client :as rdc]))
@@ -31,6 +30,7 @@
    :favorites []
    :rings {}
    :message-arcs {}
+   :system-notifications []
    :hud-open? true
    :models-ready? false})
 
@@ -43,17 +43,13 @@
  [(rf/inject-cofx ::ui.events/is-mobile?)]
  (fn [{:keys [is-mobile?]} [_ {:keys [globo-api-base-url assets-base-url]}]]
    (let [assets-base-url (or assets-base-url (str globo-api-base-url "/assets"))]
-     {:db (-> default-db
-              (assoc-in [:system-state :is-mobile?] is-mobile?)
-              (assoc :config {:globo-api-base-url globo-api-base-url
-                              :assets-base-url assets-base-url
-                              :connection-url (str globo-api-base-url "/connection")
-                              :send-message-url (str globo-api-base-url "/send-message")
-                              :max-favorite-places 3}
-                     :placeable-map-objects
-                     (reduce (fn [acc c] (assoc acc (:model-id c) c))
-                             {}
-                             map-objects/config)))
+      {:db (-> default-db
+               (assoc-in [:system-state :is-mobile?] is-mobile?)
+               (assoc :config {:globo-api-base-url globo-api-base-url
+                               :assets-base-url assets-base-url
+                               :connection-url (str globo-api-base-url "/connection")
+                               :send-message-url (str globo-api-base-url "/send-message")
+                               :max-favorite-places 3}))
       :fx [[:dispatch [:is.galt.globo.ui.connection.events/initialize]]]})))
 
 (defn ^:export init
@@ -73,3 +69,7 @@
 
 (defn stop!
   [])
+
+(comment
+  (require '[re-frame.db :refer [app-db]])
+  (keys @app-db))

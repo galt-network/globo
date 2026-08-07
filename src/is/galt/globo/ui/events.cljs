@@ -50,6 +50,11 @@
  (fn [db-rings]
    (ui.map/sync-rings-from-db! db-rings)))
 
+(rf/reg-fx
+ ::preload-models
+ (fn [{:keys [assets-base-url placeables]}]
+   (ui.map/preload-user-models assets-base-url placeables)))
+
 (defn round-to
   "Round a number to `decimals` decimal places."
   [n decimals]

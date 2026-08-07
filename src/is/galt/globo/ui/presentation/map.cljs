@@ -9,7 +9,6 @@
    [applied-science.js-interop :as j]
    [camel-snake-kebab.core :as csk]
    [is.galt.globo.ui.globe-gl-helpers :refer [apply-config!]]
-   [is.galt.globo.ui.map-objects :as map-objects]
    [is.galt.globo.ui.subscriptions :as ui.subs]
    [re-frame.core :as rf]
    [re-frame.db :as rf.db]
@@ -150,12 +149,19 @@
                 (on-load-complete))))))
 
 (defn preload-user-models
-  "Preload every configured GLB model into `model-cache` so placing
-   objects does not hit the green-sphere fallback."
-  [assets-base-url]
-  (doseq [{:keys [model-id path]} map-objects/config]
-    (let [url (str assets-base-url "/" path)]
-      (load-gltf! url model-id nil))))
+  "Preload every placeable GLB model into `model-cache` so placing
+   objects does not hit the green-sphere fallback.
+
+   Placeables come from the server (initial SSE burst). When the
+   collection is empty (server provided nothing yet, or nothing at
+   all), open the models-ready gate directly so object placement is
+   never stuck waiting for preloads that will not happen."
+  [assets-base-url placeables]
+  (if (seq placeables)
+    (doseq [{:keys [model-id path]} placeables]
+      (let [url (str assets-base-url "/" path)]
+        (load-gltf! url model-id nil)))
+    (rf/dispatch [:is.galt.globo.ui.events/all-models-ready])))
 
 (defn create-3d-object
   [d]
@@ -318,8 +324,9 @@
                                  ;; they survive hot-reloads.
                                  (sync-rings-from-db! (get-in @rf.db/app-db [:rings]))
                                  (resize!)
-                                 (let [assets-base-url @(rf/subscribe [::ui.subs/assets-base-url])]
-                                   (preload-user-models assets-base-url))
+                                 (let [assets-base-url @(rf/subscribe [::ui.subs/assets-base-url])
+                                       placeables (vals (get-in @rf.db/app-db [:placeable-map-objects]))]
+                                   (preload-user-models assets-base-url placeables))
                                  (js/window.addEventListener "resize" resize!)
                                  (js/window.addEventListener "orientationchange" resize!)))))))]
     [:div#globe-container {:class css-classes :ref on-ref}]

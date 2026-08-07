@@ -412,6 +412,21 @@
        [:span {:class "icon"} "▲"]
        [:span "Open HUD"]]]]))
 
+(defn system-notifications-view
+  []
+  (let [notifications @(rf/subscribe [::ui.subs/system-notifications])]
+    (when (seq notifications)
+      (into [:div.system-notifications]
+            (map (fn [{:keys [id message severity]}]
+                   [:div {:key id
+                          :class (str "notification is-light "
+                                      (case severity
+                                        :error "is-danger"
+                                        :warning "is-warning"
+                                        "is-info"))}
+                    message]))
+            notifications))))
+
 (defn present
   []
   (let [open? @(rf/subscribe [::ui.subs/hud-open?])
@@ -419,4 +434,5 @@
     [:div#hud {:style {:height hud-height}}
      (if open?
        [hud-details]
-       [hud-summary])]))
+       [hud-summary])
+     [system-notifications-view]]))
