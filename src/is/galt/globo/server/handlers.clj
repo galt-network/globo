@@ -105,7 +105,11 @@
   "POST endpoint: validates the inbound message, then dispatches it."
   [globo req]
   (try
-    (let [message (update (json/parse-string (slurp (:body req)) true) :type keyword)
+    (let [message (-> (json/parse-string (slurp (:body req)) true)
+                      (update :type keyword))
+          message (if (some? (:content message))
+                    (update message :content #(if (contains? % :op) (update % :op keyword) %))
+                    message)
           client-id (:connection-id message)
           user-id (:user-id req)]
       (if-let [errors (validation/inbound-errors message)]

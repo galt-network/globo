@@ -67,13 +67,13 @@
         #(messages/process {:globo g :user-id "u1"}
                            {:type :new-message :content {:text "@ghost hi"}}))
       (is (= "world" (get-in (recorded-event sent) [:content :type])))))
-  (testing "update-object :add updates storage and skips sender"
+  (testing "update-object :add updates storage and broadcasts to everybody"
     (let [g (make-globo) sent (atom [])]
       (with-recording-send! sent
         #(messages/process {:globo g :user-id "u1"}
                            {:type :update-object :content {:op :add :objects [valid-object]}}))
       (is (= #{valid-object} (protocols/get-map-objects (:storage g))))
-      (is (= [:channel-2] (vec (map first @sent))))
+      (is (= #{:channel-1 :channel-2} (set (map first @sent))))
       (let [event (recorded-event sent)]
         (is (= "update-object" (:type event)))
         (is (= "add" (get-in event [:content :op]))))))
@@ -84,19 +84,30 @@
         #(messages/process {:globo g :user-id "u1"}
                            {:type :update-object :content {:op :remove :objects [valid-object]}}))
       (is (= #{} (protocols/get-map-objects (:storage g))))
-      (is (= [:channel-2] (vec (map first @sent))))))
+      (is (= #{:channel-1 :channel-2} (set (map first @sent))))))
+  (testing "update-object :add with a single connected user succeeds (echo to sender)"
+    (let [g (globo/create-globo) sent (atom [])]
+      (handlers/register-user! g "u1")
+      (protocols/add-user-connection! (:storage g) "u1" "conn-1")
+      (protocols/add-connection! (:connections g) "conn-1" :channel-1)
+      (with-recording-send! sent
+        #(is (true? (messages/process {:globo g :user-id "u1"}
+                                      {:type :update-object
+                                       :content {:op :add :objects [valid-object]}}))))
+      (is (= [:channel-1] (map first @sent)))
+      (is (= #{valid-object} (protocols/get-map-objects (:storage g))))))
   (testing "update-object with unrecognized :op throws"
     (let [g (make-globo)]
       (is (thrown? clojure.lang.ExceptionInfo
                    (messages/process {:globo g :user-id "u1"}
                                      {:type :update-object :content {:op :bogus :objects []}})))))
-  (testing "update-user merges name/location and skips sender"
+  (testing "update-user merges name/location and broadcasts to everybody"
     (let [g (make-globo) sent (atom [])]
       (with-recording-send! sent
         #(messages/process {:globo g :user-id "u1"}
                            {:type :update-user :content {:id "u1" :name "Renamed"}}))
       (is (= "Renamed" (:name (protocols/get-user (:storage g) "u1"))))
-      (is (= [:channel-2] (vec (map first @sent))))
+      (is (= #{:channel-1 :channel-2} (set (map first @sent))))
       (let [event (recorded-event sent)]
         (is (= "update-user" (:type event)))
         (is (= "u1" (:user-id event)))

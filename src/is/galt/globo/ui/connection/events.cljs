@@ -190,7 +190,8 @@
  ::send-message-failure
  (fn [db [_ result]]
    (log-failure result)
-   (assoc-in db [:connection :status] :offline)))
+   (cond-> db
+     (not (:status result)) (assoc-in [:connection :status] :offline))))
 
 (rf/reg-event-fx
  ::send-message

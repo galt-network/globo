@@ -194,6 +194,11 @@
                                  :repeatPeriod 800
                                  :duration 3500})]]]}))))
 
+(rf/reg-event-fx
+ ::focus-user
+ (fn [_ [_ coords]]
+   {:fx [[::focus-globe (select-keys coords [:lat :lng])]]}))
+
 (rf/reg-fx
  ::ring-timer
  (fn [{:keys [id duration]}]

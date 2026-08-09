@@ -31,6 +31,7 @@
     (is (nil? (validation/inbound-errors
                {:type :update-favorite :content {:index 0 :partial {:label "Home"}}})))
     (is (nil? (validation/inbound-errors {:type :add-favorite :content {}})))
+    (is (nil? (validation/inbound-errors {:type :add-favorite})))
     (is (nil? (validation/inbound-errors {:type :broadcast :content {}})))
     (is (nil? (validation/inbound-errors
                (validation/system-notification :error {:type :x :content {}})))))

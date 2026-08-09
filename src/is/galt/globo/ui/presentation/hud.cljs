@@ -58,7 +58,7 @@
              :on-click (fn [_]
                          (when-let [loc (:location u)]
                            (rf/dispatch
-                            [::ui.events/focus-globe (select-keys loc [:lat :lng])])))}
+                            [::ui.events/focus-user loc])))}
             "Focus"]]]])]]))
 
 (defn place-objects

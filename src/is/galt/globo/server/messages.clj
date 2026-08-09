@@ -25,11 +25,11 @@
 
 (defn update-user
   "Merge :name/:location from the message into the user and broadcast the
-  updated user to everyone except the sender."
+  updated user to everybody (echo to sender; clients apply it idempotently)."
   [{:keys [globo user-id]} {:keys [content]}]
   (let [storage (user-storage globo)]
     (protocols/update-user! storage user-id #(merge % (select-keys content [:name :location])))
-    (publish/publish! globo (all-but-sender-ids globo user-id)
+    (publish/publish! globo :everybody
                       {:type :update-user :user-id user-id
                        :content (protocols/get-user storage user-id)})))
 
@@ -66,7 +66,7 @@
 
 (defn update-map-objects
   "Apply :add/:remove to the shared map-objects set and broadcast the
-  change to everyone except the sender."
+  change to everybody (echo to sender; clients sync via set-difference)."
   [{:keys [globo user-id]} {:keys [content]}]
   (let [storage (user-storage globo)
         op (keyword (:op content))
@@ -77,7 +77,7 @@
         updated (update-fn (protocols/get-map-objects storage)
                            (into #{} (:objects content)))]
     (protocols/set-map-objects! storage updated)
-    (publish/publish! globo (all-but-sender-ids globo user-id)
+    (publish/publish! globo :everybody
                       {:type :update-object :content content})))
 
 (defn resolve-recipient-ids

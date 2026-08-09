@@ -1,5 +1,7 @@
 (ns is.galt.globo.server.handlers-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [cheshire.core :as json]
+            [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
             [is.galt.globo.protocols :as protocols]
             [is.galt.globo.server :as globo]
             [is.galt.globo.server.handlers :as handlers]
@@ -55,3 +57,52 @@
         body (handlers/initial-burst-body g "c-new" "u1")]
     (is (string? body))
     (is (= 5 (count (re-seq #"data: " body))))))
+
+(deftest send-message-handler-json-test
+  (testing "string :op from a JSON body is keywordized and accepted"
+    (let [g (make-globo)
+          object {:id "p1" :lat 1 :lng 2 :model-id "carrot" :scale 10}]
+      (handlers/register-user! g "u1")
+      (handlers/register-user! g "u2")
+      (protocols/add-user-connection! (:storage g) "u2" "conn-2")
+      (protocols/add-connection! (:connections g) "conn-2" :channel-2)
+      (with-redefs [org.httpkit.server/send! (fn [ch data & _] true)]
+        (let [body (json/generate-string {:type "update-object" :connection-id "conn-1"
+                                          :content {:op "add" :objects [object]}})
+              resp (handlers/send-message-handler g
+                                                  {:user-id "u1"
+                                                   :body (io/input-stream (.getBytes body))})]
+          (is (= 200 (:status resp)))
+          (is (= #{object} (protocols/get-map-objects (:storage g)))))))))
+
+(deftest send-message-handler-single-user-test
+  (testing "placement by a lone connected user returns 200 (echo to sender)"
+    (let [g (make-globo)
+          object {:id "p1" :lat 1 :lng 2 :model-id "carrot" :scale 10}]
+      (handlers/register-user! g "u1")
+      (protocols/add-user-connection! (:storage g) "u1" "conn-1")
+      (protocols/add-connection! (:connections g) "conn-1" :channel-1)
+      (with-redefs [org.httpkit.server/send! (fn [ch data & _] true)]
+        (let [body (json/generate-string {:type "update-object" :connection-id "conn-1"
+                                          :content {:op "add" :objects [object]}})
+              resp (handlers/send-message-handler g
+                                                  {:user-id "u1"
+                                                   :body (io/input-stream (.getBytes body))})]
+          (is (= 200 (:status resp)))
+          (is (= #{object} (protocols/get-map-objects (:storage g)))))))))
+
+(deftest send-message-handler-add-favorite-test
+  (testing "content-less add-favorite JSON body returns 200 and appends a favorite"
+    (let [g (make-globo)]
+      (handlers/register-user! g "u1")
+      (protocols/add-user-connection! (:storage g) "u1" "conn-1")
+      (protocols/add-connection! (:connections g) "conn-1" :channel-1)
+      (with-redefs [org.httpkit.server/send! (fn [ch data & _] true)]
+        (let [body (json/generate-string {:type "add-favorite" :connection-id "conn-1"})
+              resp (handlers/send-message-handler g
+                                                  {:user-id "u1"
+                                                   :body (io/input-stream (.getBytes body))})
+              favorites (protocols/user-favorites (:storage g) "u1")]
+          (is (= 200 (:status resp)))
+          (is (= 1 (count favorites)))
+          (is (= "" (:label (first favorites)))))))))

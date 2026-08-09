@@ -102,7 +102,7 @@
    [:add-favorite
     [:map
      [:type [:= :add-favorite]]
-     [:content :map]]]
+     [:content {:optional true} [:map]]]]
    [:new-message
     [:map
      [:type [:= :new-message]]

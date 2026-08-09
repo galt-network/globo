@@ -1,5 +1,5 @@
 {"$schema": "https://opencode.ai/config.json",
- "instructions": ["~/.config/opencode/LLM_CODE_STYLE.md", "PROJECT_SUMMARY.md", "/home/madis/code/clojure-skills/clojure_build.md"],
+ "instructions": ["~/.config/opencode/LLM_CODE_STYLE.md", "PROJECT_SUMMARY.md"],
  "permission": {
    "external_directory": {
      "~/code/madis/galt/**": "allow"
