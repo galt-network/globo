@@ -370,8 +370,8 @@
 ;; Hexholds: H3 hexagon grid paint layer.
 (rf/reg-fx
  ::sync-hexholds
- (fn [{:keys [visible]}]
-   (ui.map/sync-hexholds-from-db! visible)))
+ (fn [{:keys [visible colors]}]
+   (ui.map/sync-hexholds-from-db! visible colors)))
 
 (rf/reg-fx
  ::update-hexhold-hover-tint
@@ -386,7 +386,7 @@
 (rf/reg-event-fx
  ::hexholds-sync-now
  (fn [{:keys [db]} _]
-   {:fx [[::sync-hexholds (select-keys (:hexholds db) [:visible])]]}))
+   {:fx [[::sync-hexholds (select-keys (:hexholds db) [:visible :colors])]]}))
 
 (rf/reg-event-fx
  ::toggle-hexholds
@@ -401,7 +401,7 @@
                        (assoc-in [:hexholds :visible] [])
                        (assoc-in [:hexholds :hover-id] nil))]
           {:db db''
-           :fx [[::sync-hexholds {:visible []}]
+           :fx [[::sync-hexholds {:visible [] :colors (get-in db [:hexholds :colors])}]
                 [::update-hexhold-hover-tint
                  {:from-id (get-in db [:hexholds :hover-id])
                   :to-id nil
@@ -423,23 +423,23 @@
             (hexholds/within-lod? (:altitude globe-viewpoint)))
      (let [cells (hexholds/viewport-cells (hexholds/viewpoint->bbox globe-viewpoint))
            db' (assoc-in db [:hexholds :visible] [])]
-       (if (seq cells)
-         {:db db'
-          :fx [[:fetch {:method :post
-                        :url (get-in db [:config :hexholds-query-url])
-                        :body {:cells cells}
-                        :request-content-type :json
-                        :response-content-types {#"application/.*json" :json}
-                        :on-success [::hexholds-query-success]
-                        :on-failure [::hexholds-query-failure]}]]}
-         {:db db'
-          :fx [[::sync-hexholds {:visible []}]]}))
+         (if (seq cells)
+          {:db db'
+           :fx [[:fetch {:method :post
+                         :url (get-in db [:config :hexholds-query-url])
+                         :body {:cells cells}
+                         :request-content-type :json
+                         :response-content-types {#"application/.*json" :json}
+                         :on-success [::hexholds-query-success]
+                         :on-failure [::hexholds-query-failure]}]]}
+          {:db db'
+           :fx [[::sync-hexholds {:visible [] :colors (get-in db [:hexholds :colors])}]]}))
       ;; out of gate: clear grid + hover, restore the hovered cell's
       ;; painted stroke/fill
       {:db (-> db
                (assoc-in [:hexholds :visible] [])
                (assoc-in [:hexholds :hover-id] nil))
-       :fx [[::sync-hexholds {:visible []}]
+       :fx [[::sync-hexholds {:visible [] :colors (get-in db [:hexholds :colors])}]
             [::update-hexhold-hover-tint
              {:from-id (get-in db [:hexholds :hover-id])
               :to-id nil
@@ -455,8 +455,9 @@
                           :color (or (get colors id)
                                      (when color (keyword color)))})
                        hexholds)]
-     {:db (assoc-in db [:hexholds :visible] visible)
-      :fx [[::sync-hexholds {:visible visible}]]})))
+    {:db (assoc-in db [:hexholds :visible] visible)
+     :fx [[::sync-hexholds {:visible visible
+                            :colors (get-in db [:hexholds :colors])}]]})))
 
 (rf/reg-event-db
  ::hexholds-query-failure
@@ -472,8 +473,8 @@
                            (assoc h :color c)
                            h))
                        (get-in db [:hexholds :visible]))]
-     {:db (assoc-in db [:hexholds :colors] colors')
-      :fx [[::sync-hexholds {:visible visible}]]})))
+    {:db (assoc-in db [:hexholds :colors] colors')
+     :fx [[::sync-hexholds {:visible visible :colors colors'}]]})))
 
 (rf/reg-event-fx
  ::hexhold-updated
@@ -482,11 +483,8 @@
          db' (if color
                (assoc-in db [:hexholds :colors id] color)
                (update-in db [:hexholds :colors] dissoc id))
-         visible (mapv (fn [{:keys [id'] :as h}]
-                         (if (= id' id)
-                           (assoc h :color color)
-                           h))
-                       (get-in db [:hexholds :visible]))
+         visible (hexholds/update-visible-entry
+                  (get-in db [:hexholds :visible]) id color)
          db'' (assoc-in db' [:hexholds :visible] visible)]
      {:db db''
       :fx [[::schedule-hexholds-sync]]})))

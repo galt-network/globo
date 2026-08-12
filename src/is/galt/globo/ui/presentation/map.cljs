@@ -149,25 +149,32 @@
 
 (defn sync-hexholds-from-db!
   "Reconcile the globe polygonsData array with the app-db :hexholds
-   :visible vector. When the id set matches the cache, only the color
-   fields are mutated on the SAME cached JS objects and the same array is
-   re-passed to polygonsData — three-globe matches meshes by its stamped
-   __id, so materials update without rebuilding geometry. When the id set
-   differs the whole array is rebuilt and the ring cache invalidated."
-  [visible]
+   state. :visible owns the viewport id set; :colors (the authoritative
+   server mirror) owns the paint colors — feature colors are ALWAYS
+   derived from :colors, never from :visible entry colors, so a stale or
+   partially-updated :visible can never paint a cell back to unpainted.
+   When the id set matches the cache, only the color fields are mutated
+   on the SAME cached JS objects and the same array is re-passed to
+   polygonsData — three-globe matches meshes by its stamped __id, so
+   materials update without rebuilding geometry. When the id set differs
+   the whole array is rebuilt and the ring cache invalidated."
+  [visible colors]
   (let [cache @hexhold-cache
         ids (into #{} (map :id) visible)
         cached-ids (into #{} (keys cache))]
     (if (= ids cached-ids)
       (do
-        (doseq [{:keys [id color]} visible]
+        (doseq [{:keys [id]} visible]
           (when-let [feature (get cache id)]
-            (aset feature "color" color)
-            (aset feature "cap-color" (hexholds/fill-color color))))
+            (aset feature "color" (get colors id))
+            (aset feature "cap-color" (hexholds/fill-color (get colors id)))))
         (when-let [g @globe-instance]
           (j/call g :polygonsData @hexholds-data))
         (apply-hover-tint!))
-      (let [features (->> visible (mapv hexhold->js-feature) clj->js)]
+      (let [features (->> visible
+                          (mapv (fn [{:keys [id]}]
+                                  (hexhold->js-feature {:id id :color (get colors id)})))
+                          clj->js)]
         (reset! hexholds-data features)
         (swap! hexholds-version inc)
         (reset! hexhold-ring-cache {})
@@ -589,7 +596,9 @@
                                  ;; before this globe was (re)mounted, so
                                  ;; they survive hot-reloads.
                                  (sync-rings-from-db! (get-in @rf.db/app-db [:rings]))
-                                 (sync-hexholds-from-db! (get-in @rf.db/app-db [:hexholds :visible]))
+                                 (sync-hexholds-from-db!
+                                  (get-in @rf.db/app-db [:hexholds :visible])
+                                  (get-in @rf.db/app-db [:hexholds :colors]))
                                  (resize!)
                                  (let [assets-base-url @(rf/subscribe [::ui.subs/assets-base-url])
                                        placeables (vals (get-in @rf.db/app-db [:placeable-map-objects]))]

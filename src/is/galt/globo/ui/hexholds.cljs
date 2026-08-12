@@ -90,6 +90,17 @@
                (contains? visible-ids hex-id))
       {:hex-id hex-id})))
 
+(defn update-visible-entry
+  "Set the :color of the :visible entry whose :id equals hex-id; all other
+   entries are returned unchanged. Entries not in :visible are not added
+   (the viewport query owns the id set)."
+  [visible hex-id color]
+  (mapv (fn [{entry-id :id :as h}]
+          (if (= entry-id hex-id)
+            (assoc h :color color)
+            h))
+        visible))
+
 (defn latlng->cell
   [lat lng]
   (h3/latLngToCell lat lng resolution))

@@ -377,6 +377,34 @@
     (is (= hexholds/default-stroke (hexholds/hover-stroke-color false)))
     (is (= hexholds/default-stroke (hexholds/hover-stroke-color nil)))))
 
+(deftest update-visible-entry-test
+  (let [cell-a (hexholds/latlng->cell 20 0)
+        cell-b (east-neighbor cell-a)
+        visible [{:id cell-a :color nil}
+                 {:id cell-b :color nil}]]
+    (testing "paints the matching entry"
+      (is (= [{:id cell-a :color :red}
+              {:id cell-b :color nil}]
+             (hexholds/update-visible-entry visible cell-a :red))))
+    (testing "clears the matching entry (color nil)"
+      (is (= [{:id cell-a :color nil}
+              {:id cell-b :color nil}]
+             (hexholds/update-visible-entry visible cell-a nil))))
+    (testing "does not touch other entries"
+      (is (= [{:id cell-a :color :red}
+              {:id cell-b :color nil}]
+             (hexholds/update-visible-entry visible cell-a :red))))
+    (testing "unknown id leaves the vector unchanged (no entry created)"
+      (is (= visible
+             (hexholds/update-visible-entry visible
+                                            (hexholds/latlng->cell 21 1)
+                                            :red))))
+    (testing "regression: the entry is matched by its :id — the original
+             bug destructured :id' (apostrophe) and never matched, so the
+             painted cell kept its unpainted entry while :colors updated"
+      (is (= :red (:color (first (hexholds/update-visible-entry
+                                  visible cell-a :red))))))))
+
 (deftest click-paint-hexhold-test
   (let [cell-a (hexholds/latlng->cell 20 0)
         cell-b (east-neighbor cell-a)
