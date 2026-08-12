@@ -9,6 +9,7 @@
    [applied-science.js-interop :as j]
    [camel-snake-kebab.core :as csk]
    [is.galt.globo.ui.globe-gl-helpers :refer [apply-config!]]
+   [is.galt.globo.ui.hexholds :as hexholds]
    [is.galt.globo.ui.subscriptions :as ui.subs]
    [re-frame.core :as rf]
    [re-frame.db :as rf.db]
@@ -34,6 +35,40 @@
 ;; with the app-db :message-arcs map via sync-arcs-from-db!.
 (defonce arcs-data (atom (new js/Array)))
 (defonce arc-timers (atom {}))
+;; Hexholds layer state. hexholds-data is the JS array handed to
+;; globe.polygonsData; hexhold-cache maps hex-id -> the SAME JS feature
+;; object, so color-only updates mutate materials in place (no geometry
+;; rebuild); hexholds-version invalidates the screen-space ring cache on
+;; every rebuild.
+(defonce hexholds-data (atom (new js/Array)))
+(defonce hexhold-cache (atom {}))
+(defonce hexholds-version (atom 0))
+;; Screen-space ring cache: {key -> {hex-id -> [[px py] ...]}} keyed by
+;; camera state fingerprint (hexhold-cache-key).
+(defonce hexhold-ring-cache (atom {}))
+;; The hover highlight LineLoop currently in the scene.
+(defonce hexhold-highlight (atom nil))
+;; Own canvas listeners + click state for hexhold hit-testing.
+(defonce hexhold-move-handler (atom nil))
+;; Debounced sync timer handle (::schedule-hexholds-sync batches paint
+;; echoes into a single polygonsData call).
+(defonce hexhold-sync-timer (atom nil))
+;; Debounced viewport-refresh timer handle for camera moves (onZoom).
+(defonce hexhold-viewport-refresh-timer (atom nil))
+
+(defn schedule-hexholds-viewport-refresh!
+  "Trailing-debounced viewport refresh on camera moves (drag/zoom fly
+   through the LOD boundary). Dispatches the re-frame event that re-runs
+   the active? + within-lod? gates and re-queries the viewport."
+  [_pov]
+  (when-let [t @hexhold-viewport-refresh-timer]
+    (js/clearTimeout t))
+  (reset! hexhold-viewport-refresh-timer
+          (js/setTimeout
+           (fn []
+             (reset! hexhold-viewport-refresh-timer nil)
+             (rf/dispatch [:is.galt.globo.ui.events/refresh-hexholds-viewport]))
+           250)))
 
 (defn- default-ring-params
   "Fill in globe.gl Rings Layer defaults for any field absent from `ring`."
@@ -93,12 +128,229 @@
     (when-let [g @globe-instance]
       (j/call g :arcsData @arcs-data))))
 
+;; Hexholds layer
+(defn- hexhold->js-feature
+  [{:keys [id color]}]
+  (-> (hexholds/polygon-feature id color)
+      (merge (hexholds/hexhold->props color))
+      clj->js))
+
+(defn- apply-hover-tint!
+  "Re-apply the hover tint to the currently hovered cell after a paint or
+   rebuild sync (both reset cap-color to the painted fill)."
+  []
+  (let [app-db @rf.db/app-db
+        hover-id (get-in app-db [:hexholds :hover-id])]
+    (when-let [f (get @hexhold-cache hover-id)]
+      (aset f "cap-color" (hexholds/hover-fill-color
+                           (get-in app-db [:hexholds :colors hover-id])))
+      (when-let [g @globe-instance]
+        (j/call g :polygonsData @hexholds-data)))))
+
+(defn sync-hexholds-from-db!
+  "Reconcile the globe polygonsData array with the app-db :hexholds
+   :visible vector. When the id set matches the cache, only the color
+   fields are mutated on the SAME cached JS objects and the same array is
+   re-passed to polygonsData — three-globe matches meshes by its stamped
+   __id, so materials update without rebuilding geometry. When the id set
+   differs the whole array is rebuilt and the ring cache invalidated."
+  [visible]
+  (let [cache @hexhold-cache
+        ids (into #{} (map :id) visible)
+        cached-ids (into #{} (keys cache))]
+    (if (= ids cached-ids)
+      (do
+        (doseq [{:keys [id color]} visible]
+          (when-let [feature (get cache id)]
+            (aset feature "color" color)
+            (aset feature "cap-color" (hexholds/fill-color color))))
+        (when-let [g @globe-instance]
+          (j/call g :polygonsData @hexholds-data))
+        (apply-hover-tint!))
+      (let [features (->> visible (mapv hexhold->js-feature) clj->js)]
+        (reset! hexholds-data features)
+        (swap! hexholds-version inc)
+        (reset! hexhold-ring-cache {})
+        (reset! hexhold-cache (into {} (map (fn [f] [(aget f "id") f])) features))
+        (when-let [g @globe-instance]
+          (j/call g :polygonsData features))
+        (apply-hover-tint!)))))
+
+(defn set-hexhold-hover-tint!
+  "Cap-color transition for a hover change: the previously hovered cell
+   (from-id) reverts to its painted fill, the newly hovered cell (to-id)
+   gets the hover tint. Mutates the cached JS features in place — no
+   geometry rebuild."
+  [from-id to-id colors]
+  (let [cache @hexhold-cache
+        from-f (when from-id (get cache from-id))
+        to-f (when to-id (get cache to-id))]
+    (when (or from-f to-f)
+      (when from-f
+        (aset from-f "cap-color" (hexholds/fill-color (get colors from-id))))
+      (when to-f
+        (aset to-f "cap-color" (hexholds/hover-fill-color (get colors to-id))))
+      (when-let [g @globe-instance]
+        (j/call g :polygonsData @hexholds-data)))))
+
+(defn- project-ring-vertex
+  "Project one [lng lat] vertex to canvas pixel coords. The vertex is
+   placed at ring-altitude (the polygon caps' render scale), so projected
+   rings line up with the on-screen polygons."
+  [globe camera w h lng lat]
+  (let [v (j/call globe :getCoords lat lng hexholds/ring-altitude)
+        vec3 (THREE/Vector3. (.-x v) (.-y v) (.-z v))]
+    (j/call vec3 :applyMatrix4 (j/get camera :matrixWorldInverse))
+    (j/call vec3 :applyMatrix4 (j/get camera :projectionMatrix))
+    [(* (+ (.-x vec3) 1) 0.5 w)
+     (* (- 1 (.-y vec3)) 0.5 h)]))
+
+(defn projected-cell-rings
+  "Screen-space rings {hex-id -> [[px py] ...closed-ring]} for every
+   feature currently in hexholds-data, projected from world coords with
+   the current camera matrices."
+  [globe]
+  (let [renderer (j/call globe :renderer)
+        canvas (j/get renderer :domElement)
+        w (.-clientWidth canvas)
+        h (.-clientHeight canvas)
+        camera (j/call globe :camera)]
+    (j/call camera :updateMatrixWorld true)
+    (into {}
+          (map (fn [feature]
+                 (let [coords (j/get-in feature [:geometry :coordinates 0])
+                       ring (mapv (fn [v] (project-ring-vertex globe camera w h (aget v 0) (aget v 1)))
+                                  coords)]
+                   [(aget feature "id") ring])))
+          @hexholds-data)))
+
+(defn hexhold-cache-key
+  "Fingerprint of the camera state + canvas size + layer version. When it
+   matches the cached key the projected rings are reused verbatim."
+  [globe]
+  (let [camera (j/call globe :camera)
+        pos (j/get camera :position)
+        quat (j/get camera :quaternion)
+        canvas (j/get (j/call globe :renderer) :domElement)]
+    (str @hexholds-version
+         "|" (j/get camera :zoom)
+         "|" (j/get pos :x) "," (j/get pos :y) "," (j/get pos :z)
+         "|" (j/get quat :x) "," (j/get quat :y) "," (j/get quat :z) "," (j/get quat :w)
+         "|" (.-clientWidth canvas) "x" (.-clientHeight canvas))))
+
+(defn hit-test-hexhold
+  "Screen-space hit test: the hexagon under the pointer (cursor position
+   from the event), or nil. Returns {:hex-id id :lat lat :lng lng} with
+   the CELL CENTER coords."
+  [globe ev]
+  (let [renderer (j/call globe :renderer)
+        canvas (j/get renderer :domElement)
+        rect (j/call canvas :getBoundingClientRect)
+        px (- (.-pageX ev) (+ (.-left rect) (.-scrollX js/window)))
+        py (- (.-pageY ev) (+ (.-top rect) (.-scrollY js/window)))
+        w (.-clientWidth canvas)
+        h (.-clientHeight canvas)
+        computed-key (hexhold-cache-key globe)
+        {:keys [key rings]} @hexhold-ring-cache
+        rings (if (= computed-key key)
+                rings
+                (let [rings' (projected-cell-rings globe)]
+                  (swap! hexhold-ring-cache assoc :key computed-key :rings rings')
+                  rings'))
+        hit (hexholds/hit-test-point rings px py)]
+    (when hit
+      (let [{:keys [lat lng]} (hexholds/cell->latlng hit)]
+        {:hex-id hit :lat lat :lng lng}))))
+
+(defn update-hexhold-highlight!
+  "Replace the hover highlight LineLoop (teal, R*(1+highlight-altitude) so
+   it renders above the polygon caps) for hover-id, or remove it when nil."
+  [globe hover-id]
+  (when globe
+    (when-let [line @hexhold-highlight]
+      (j/call (j/call globe :scene) :remove line)
+      (j/call (j/get line :geometry) :dispose)
+      (j/call (j/get line :material) :dispose)
+      (reset! hexhold-highlight nil))
+    (when hover-id
+      (let [vertices (mapv (fn [[lng lat]]
+                             (let [v (j/call globe :getCoords lat lng hexholds/highlight-altitude)]
+                               (THREE/Vector3. (.-x v) (.-y v) (.-z v))))
+                           (hexholds/cell-boundary-ring hover-id))
+            geometry (THREE/BufferGeometry.)
+            material (THREE/LineBasicMaterial. #js {:color 0x00bcd4})
+            line (THREE/LineLoop. geometry material)]
+        (j/call geometry :setFromPoints (clj->js vertices))
+        (j/call (j/call globe :scene) :add line)
+        (reset! hexhold-highlight line)))))
+
+(def hover-throttle-ms 30)
+(def click-max-drift-px 5)
+(def click-max-elapsed-ms 400)
+
+(defn install-hexhold-listeners!
+  "Own canvas pointer listeners for hexhold hover + click. The internal
+   three-render-objects click pipeline is broken for real mice (P6), so
+   everything is driven from these + the screen-space hit test."
+  [globe]
+  (let [canvas (j/get (j/call globe :renderer) :domElement)
+        hover-handler
+        (fn [ev]
+          (let [now (js/Date.now)
+                last-fire (:last-fire @hexhold-move-handler)]
+            (when (or (nil? last-fire) (>= (- now last-fire) hover-throttle-ms))
+              (swap! hexhold-move-handler assoc :last-fire now)
+              (rf/dispatch [:is.galt.globo.ui.events/set-hexhold-hover
+                            (:hex-id (hit-test-hexhold globe ev))]))))
+        down-handler
+        (fn [ev]
+          (swap! hexhold-move-handler assoc
+                 :down-x (.-pageX ev)
+                 :down-y (.-pageY ev)
+                 :down-t (js/Date.now)))
+        up-handler
+        (fn [ev]
+          (let [{:keys [down-x down-y down-t]} @hexhold-move-handler
+                dx (js/Math.abs (- (.-pageX ev) (or down-x -100000)))
+                dy (js/Math.abs (- (.-pageY ev) (or down-y -100000)))
+                elapsed (- (js/Date.now) (or down-t 0))]
+            (when (and down-t
+                       (< elapsed click-max-elapsed-ms)
+                       (<= dx click-max-drift-px)
+                       (<= dy click-max-drift-px))
+              (when-let [point (hit-test-hexhold globe ev)]
+                (rf/dispatch [:is.galt.globo.ui.events/click-globe point])))))]
+    (.addEventListener canvas "pointermove" hover-handler)
+    (.addEventListener canvas "pointerdown" down-handler)
+    (.addEventListener canvas "pointerup" up-handler)
+    (reset! hexhold-move-handler {:hover-handler hover-handler
+                                  :down-handler down-handler
+                                  :up-handler up-handler
+                                  :last-fire nil
+                                  :down-x nil
+                                  :down-y nil
+                                  :down-t nil})))
+
+(defn schedule-hexholds-sync!
+  "Trailing-debounced polygonsData sync (120ms), so bursts of paint
+   echoes collapse into one material update."
+  []
+  (when-let [t @hexhold-sync-timer]
+    (js/clearTimeout t))
+  (reset! hexhold-sync-timer
+          (js/setTimeout
+           (fn []
+             (reset! hexhold-sync-timer nil)
+             (rf/dispatch [:is.galt.globo.ui.events/hexholds-sync-now]))
+           120)))
+
 (defn add-to-layer
   [layer-key obj]
   (.push (get @layer-data layer-key) obj)
   (j/call @globe-instance (csk/->camelCase layer-key) (get @layer-data layer-key)))
 
 (defn remove-from-layer
+  [layer-key obj]
   [layer-key obj]
   (let [id (:id obj)
         layer-objects (get @layer-data layer-key)
@@ -218,7 +470,16 @@
                                            (.-z coords)))
                                  obj)
    :on-custom-layer-click (fn [_ _ _] nil)
-   :on-custom-layer-hover (fn [_ _] nil)})
+   :on-custom-layer-hover (fn [_ _] nil)
+   :polygons-data []
+   :polygon-geo-json-geometry "geometry"
+   :polygon-cap-color "cap-color"
+   :polygon-side-color (constantly nil)
+   :polygon-stroke-color "stroke-color"
+   :polygon-altitude "altitude"
+   :polygons-transition-duration 0
+   :on-polygon-click (fn [_ _ _] nil)
+   :on-zoom schedule-hexholds-viewport-refresh!})
 
 (defn- dispose-globe!
   "Tear down a Globe instance: stop the render loop, dispose Three.js
@@ -276,7 +537,35 @@
     (reset! arc-timers {})
     (reset! arcs-data (new js/Array))
     (rf/dispatch [:is.galt.globo.ui.events/clear-message-arcs])
-    ;; 6. Null out the global handle
+    ;; 6. Hexholds: remove own canvas listeners, drop the highlight line
+    ;; from the scene, cancel pending timers, reset layer state. The
+    ;; app-db :hexholds :visible is re-synced on the next mount.
+    (when-let [{:keys [hover-handler down-handler up-handler]} @hexhold-move-handler]
+      (try
+        (let [canvas (j/get (j/call globe :renderer) :domElement)]
+          (.removeEventListener canvas "pointermove" hover-handler)
+          (.removeEventListener canvas "pointerdown" down-handler)
+          (.removeEventListener canvas "pointerup" up-handler))
+        (catch :default _))
+      (reset! hexhold-move-handler nil))
+    (when-let [line @hexhold-highlight]
+      (try
+        (j/call (j/call globe :scene) :remove line)
+        (j/call (j/get line :geometry) :dispose)
+        (j/call (j/get line :material) :dispose)
+        (catch :default _))
+      (reset! hexhold-highlight nil))
+    (when-let [t @hexhold-sync-timer]
+      (js/clearTimeout t)
+      (reset! hexhold-sync-timer nil))
+    (when-let [t @hexhold-viewport-refresh-timer]
+      (js/clearTimeout t)
+      (reset! hexhold-viewport-refresh-timer nil))
+    (reset! hexhold-ring-cache {})
+    (swap! hexholds-version inc)
+    (reset! hexhold-cache {})
+    (reset! hexholds-data (new js/Array))
+    ;; 7. Null out the global handle
     (reset! globe-instance nil)))
 
 (defn present
@@ -319,10 +608,13 @@
                                (let [globe (new Globe el)]
                                  (apply-config! globe globe-gl-config app-config)
                                  (reset! globe-instance globe)
+                                 (install-hexhold-listeners! globe)
                                  ;; Re-sync any rings that were in app-db
                                  ;; before this globe was (re)mounted, so
                                  ;; they survive hot-reloads.
                                  (sync-rings-from-db! (get-in @rf.db/app-db [:rings]))
+                                 (sync-hexholds-from-db! (get-in @rf.db/app-db [:hexholds :visible]))
+                                 (update-hexhold-highlight! globe (get-in @rf.db/app-db [:hexholds :hover-id]))
                                  (resize!)
                                  (let [assets-base-url @(rf/subscribe [::ui.subs/assets-base-url])
                                        placeables (vals (get-in @rf.db/app-db [:placeable-map-objects]))]

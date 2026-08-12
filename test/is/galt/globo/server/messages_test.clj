@@ -152,6 +152,28 @@
         #(messages/process {:globo g :user-id "u1"}
                            {:type :user-offline :connection-id "conn-1" :content {:id "u1"}}))
       (is (empty? @sent))))
+  (testing "paint-hexhold stores the color and broadcasts to everybody"
+    (let [g (make-globo) sent (atom [])]
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :paint-hexhold :content {:hex-id "abc" :color :red}}))
+      (is (= {"abc" :red} (protocols/hexhold-colors (:hexholds g))))
+      (is (= #{:channel-1 :channel-2} (set (map first @sent))))
+      (let [event (recorded-event sent)]
+        (is (= "hexholds-updated" (:type event)))
+        (is (= "abc" (get-in event [:content :id])))
+        (is (= "red" (get-in event [:content :color]))))))
+  (testing "paint-hexhold with nil color clears the cell"
+    (let [g (make-globo) sent (atom [])]
+      (protocols/paint-hexhold! (:hexholds g) "abc" :blue)
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :paint-hexhold :content {:hex-id "abc" :color nil}}))
+      (is (= {} (protocols/hexhold-colors (:hexholds g))))
+      (let [event (recorded-event sent)]
+        (is (= "hexholds-updated" (:type event)))
+        (is (= "abc" (get-in event [:content :id])))
+        (is (nil? (get-in event [:content :color]))))))
   (testing "unknown :type throws"
     (let [g (make-globo)]
       (is (thrown? clojure.lang.ExceptionInfo

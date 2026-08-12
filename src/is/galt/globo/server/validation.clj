@@ -113,6 +113,12 @@
     [:map
      [:type [:= :broadcast]]
      [:content :map]]]
+   [:paint-hexhold
+    [:map
+     [:type [:= :paint-hexhold]]
+     [:content [:map
+                [:hex-id string?]
+                [:color [:maybe [:enum "red" "blue" "green" "yellow" "purple"]]]]]]]
    [:system-notification
     [:map
      [:type [:= :system-notification]]
@@ -186,6 +192,17 @@
      [:type [:= :placeable-map-objects]]
      [:content [:map
                 [:objects [:vector PlaceableObject]]]]]]
+   [:hexholds
+    [:map
+     [:type [:= :hexholds]]
+     [:content [:map
+                [:colors [:map-of string? [:enum :red :blue :green :yellow :purple]]]]]]]
+   [:hexholds-updated
+    [:map
+     [:type [:= :hexholds-updated]]
+     [:content [:map
+                [:id string?]
+                [:color [:maybe [:enum :red :blue :green :yellow :purple]]]]]]]
    [:system-notification
     [:map
      [:type [:= :system-notification]]

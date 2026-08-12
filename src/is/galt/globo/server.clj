@@ -8,6 +8,7 @@
    [is.galt.globo.protocols :as protocols]
    [is.galt.globo.server.connections :as connections]
    [is.galt.globo.server.handlers :as handlers]
+   [is.galt.globo.server.hexholds :as hexholds]
    [is.galt.globo.server.messages :as messages]
    [is.galt.globo.server.placeables :as placeables]
    [is.galt.globo.server.publish :as publish]
@@ -15,7 +16,7 @@
    [is.galt.globo.server.validation :as validation]))
 
 (defrecord Globo
-  [mount-path storage connections placeables log-fn])
+  [mount-path storage connections placeables hexholds log-fn])
 
 (defn create-globo
   "Build a Globo component.
@@ -27,9 +28,11 @@
     :placeables    - placeable-objects config vector (data) or a
                      PlaceableObjectProvider implementation,
                      default the built-in static config
+    :hexholds      - HexholdStore implementation, default in-memory with
+                     an optional land index loaded from classpath
     :log-fn        - logging fn (args are printed), default println"
   ([] (create-globo {}))
-  ([{:keys [mount-path storage connections placeables log-fn]}]
+  ([{:keys [mount-path storage connections placeables hexholds log-fn]}]
    (->Globo (or mount-path "/map")
             (or storage (storage/in-memory-globo-storage))
             (or connections (connections/in-memory-connection-store))
@@ -37,6 +40,8 @@
               (nil? placeables) (placeables/static-placeable-objects)
               (satisfies? protocols/PlaceableObjectProvider placeables) placeables
               :else (placeables/static-placeable-objects placeables))
+            (or hexholds (hexholds/in-memory-hexhold-store
+                          (hexholds/load-land-index "hexholds/land-res5.txt")))
             (or log-fn println))))
 
 (defn normalize
@@ -88,6 +93,8 @@
      (partial handlers/new-connection-handler globo)
      (str "POST" (:mount-path globo) "/send-message")
      (partial handlers/send-message-handler globo)
+     (str "POST" (:mount-path globo) "/hexholds/query")
+     (partial handlers/hexholds-query-handler globo)
      (str "GET" (:mount-path globo) "/assets/**")
      handlers/assets-handler}))
 

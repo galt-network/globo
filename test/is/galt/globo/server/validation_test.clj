@@ -34,6 +34,10 @@
     (is (nil? (validation/inbound-errors {:type :add-favorite})))
     (is (nil? (validation/inbound-errors {:type :broadcast :content {}})))
     (is (nil? (validation/inbound-errors
+               {:type :paint-hexhold :content {:hex-id "abc" :color "red"}})))
+    (is (nil? (validation/inbound-errors
+               {:type :paint-hexhold :content {:hex-id "abc" :color nil}})))
+    (is (nil? (validation/inbound-errors
                (validation/system-notification :error {:type :x :content {}})))))
   (testing "invalid messages fail"
     (is (= {:content {:text ["should be a string"]}}
@@ -42,7 +46,13 @@
            (validation/inbound-errors {:type :bogus :content {}})))
     (is (some? (validation/inbound-errors
                 {:type :update-object :content {:op :bogus :objects []}})))
-    (is (some? (validation/inbound-errors {:type :new-message :content {}})))))
+    (is (some? (validation/inbound-errors {:type :new-message :content {}})))
+    (is (some? (validation/inbound-errors
+                {:type :paint-hexhold :content {:hex-id "abc" :color "orange"}})))
+    (is (some? (validation/inbound-errors
+                {:type :paint-hexhold :content {:hex-id "abc" :color :red}})))
+    (is (some? (validation/inbound-errors
+                {:type :paint-hexhold :content {:hex-id 42 :color "red"}})))))
 
 (deftest outbound-errors-test
   (testing "valid events pass"
@@ -65,6 +75,14 @@
                {:type :placeable-map-objects
                 :content {:objects [{:model-id "carrot" :path "3d/carrot.glb" :scale 10}]}})))
     (is (nil? (validation/outbound-errors
+               {:type :hexholds :content {:colors {"a" :red "b" :purple}}})))
+    (is (nil? (validation/outbound-errors
+               {:type :hexholds :content {:colors {}}})))
+    (is (nil? (validation/outbound-errors
+               {:type :hexholds-updated :content {:id "abc" :color :red}})))
+    (is (nil? (validation/outbound-errors
+               {:type :hexholds-updated :content {:id "abc" :color nil}})))
+    (is (nil? (validation/outbound-errors
                (validation/system-notification :warning {:type :bogus :content {}})))))
   (testing "invalid events fail"
     (is (= {:type ["invalid dispatch value"]}
@@ -72,7 +90,13 @@
     (is (some? (validation/outbound-errors {:type :update-user :content valid-user})))
     (is (some? (validation/outbound-errors
                 {:type :favorite-added :content {:index 0 :favorite valid-favorite}})))
-    (is (some? (validation/outbound-errors {:type :users-online :content {:users [42]}})))))
+    (is (some? (validation/outbound-errors {:type :users-online :content {:users [42]}})))
+    (is (some? (validation/outbound-errors
+                {:type :hexholds :content {:colors {"a" :orange}}})))
+    (is (some? (validation/outbound-errors
+                {:type :hexholds-updated :content {:color :red}})))
+    (is (some? (validation/outbound-errors
+                {:type :hexholds-updated :content {:id 42 :color :red}})))))
 
 (deftest system-notification-test
   (let [event {:type :map-objects :content {:objects #{}}}

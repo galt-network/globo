@@ -256,6 +256,17 @@
       :on-click #(rf/dispatch [::ui.events/set-settings-open (not settings-open?)])}
      [icon :settings]]))
 
+(defn hexholds-button
+  "Toggle for the hexholds grid layer. Sits next to the settings button
+   in the HUD top bar (both layouts)."
+  []
+  (let [active? @(rf/subscribe [::ui.subs/hexholds-active?])]
+    [:button.button.is-small.is-light.is-inverted.ml-2.mb-2
+     {:class (when active? "is-active")
+      :title "Show/Hide hexholds"
+      :on-click #(rf/dispatch [::ui.events/toggle-hexholds])}
+     [icon :hexholds]]))
+
 (defn settings-panel
   "Settings panel: name input and location picker. Fills the HUD body
    area below the header. Reuses hud-panel/panel-row so styling matches
@@ -315,6 +326,7 @@
     [:div.is-flex.is-align-items-center.pt-2.px-3.mb-2.is-flex-shrink-0
      [status-dot connection-status]
      [settings-button]
+     [hexholds-button]
      [:div.is-flex-grow-1]
      [panel-tabs]
      [:div.is-flex-grow-1.is-flex.is-justify-content-flex-end
@@ -347,6 +359,7 @@
     [:div.is-flex.is-align-items-center.px-3.pt-2.is-flex-shrink-0
      [status-dot connection-status]
      [settings-button]
+     [hexholds-button]
      [:div.is-flex-grow-1]
      [:div.hud-grab-handle
       {:on-click #(rf/dispatch [::ui.events/set-hud-open false])

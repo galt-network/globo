@@ -38,7 +38,8 @@
      {:type :map-objects :content {:objects (protocols/get-map-objects storage)}}
      {:type :users-online :content {:users (vec (users-online globo))}}
      {:type :messages :content {:messages (protocols/latest-messages storage 20)}}
-     {:type :placeable-map-objects :content {:objects (protocols/placeable-objects (:placeables globo) user-id)}}]))
+     {:type :placeable-map-objects :content {:objects (protocols/placeable-objects (:placeables globo) user-id)}}
+     {:type :hexholds :content {:colors (protocols/hexhold-colors (:hexholds globo))}}]))
 
 (defn safe-sse-event
   "Validates an outbound event; invalid events are replaced with a
@@ -121,6 +122,18 @@
           (json-response 404 {:status "error"
                               :error "client not found or send failed"
                               :client-id client-id}))))
+    (catch Exception e
+      (json-response 400 {:status "error" :error (.getMessage e)}))))
+
+(defn hexholds-query-handler
+  "POST endpoint: intersect the requested cell-ids with the land index and
+  return their colors. Malformed bodies or non-string cells -> 400."
+  [globo req]
+  (try
+    (let [{:keys [cells]} (json/parse-string (slurp (:body req)) true)]
+      (if (or (nil? cells) (not (every? string? cells)))
+        (json-response 400 {:status "error" :error "invalid cells"})
+        (json-response 200 {:hexholds (protocols/query-hexholds (:hexholds globo) cells)})))
     (catch Exception e
       (json-response 400 {:status "error" :error (.getMessage e)}))))
 

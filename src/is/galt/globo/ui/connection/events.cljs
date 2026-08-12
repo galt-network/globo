@@ -33,6 +33,8 @@
       :favorite-added [::favorite-added content]
       :favorite-updated [::favorite-updated content]
       :placeable-map-objects [::update-placeable-map-objects content]
+      :hexholds [:is.galt.globo.ui.events/hexholds-colors content]
+      :hexholds-updated [:is.galt.globo.ui.events/hexhold-updated content]
       :system-notification [::system-notification content]
       nil)))
 

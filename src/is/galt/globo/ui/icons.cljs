@@ -6,7 +6,8 @@
    :settings [:fas :fa-solid :fa-user-gear]
    :pick-location [:fa-solid :fa-location-crosshairs]
    :edit [:fa-solid :fa-pen-to-square]
-   :set-location [:fa-solid :fa-location-dot]})
+   :set-location [:fa-solid :fa-location-dot]
+   :hexholds [:fa-solid :fa-hexagon]})
 
 (defn icon
   [icon-type & [text]]

@@ -77,6 +77,7 @@ The **library code** lives under `src/is/galt/globo/`. The **example/integration
 | `resources/public/` | Static assets served by the library's `assets-handler`: `css/main.css` (HUD styles), `js/` (compiled globo.js, gitignored), `3d/` (8 GLB models: carrot, fantasy_tree, mountain_robot, ancap_bug, ancap_flag, zombie, scroll, snowman — scroll/snowman present but not yet in config). |
 | `README.md` | Brief overview + screenshot; quickstart `bb server --example static`. |
 | `ideas.md` | (untracked) Future ideas. Item 1 (message arcs, emit-arcs-on-click) is implemented — see "Message arcs" pattern; item 2 remains: click favorite → rotation animation + ripple rings (rings layer already exists via `::add-ring`). |
+| `docs/hexholds-feature-prompt.md` | (untracked) One-shot rebuild prompt for the **hexholds** feature — a toggleable H3 hexagon tile grid over the globe (hover-highlight cells, click to paint through a 5-color cycle, paints shared live between users). Contains the functional spec, exact message protocol, architecture, config knobs, and a Pitfalls list of previously-discovered bugs. Intended to be handed to a fresh LLM session to rebuild the feature from scratch; supersedes the abandoned `hexholds-prototype-a` branch (raycast-based ownership UX). `docs/images/` holds related screenshots. |
 
 ## Dependencies
 
@@ -225,6 +226,16 @@ and `InMemoryConnectionStore` keeps `{connection-id http-kit-channel ...}`. Impl
 - **clj-reload**: dev namespaces use `clj-reload` with `:no-reload` on the dev/user ns itself; host `server.main` implements `before-ns-unload`/`after-ns-reload` to restart the server on reload.
 - **Component model (host integration)**: `create-globo` returns a `Globo` record; hosts pass it to `routes`/`create-handler` or call `publish!`/`send-message!` directly. `publish!` targets: `:everybody`, `:sender`, `:all-but-sender`, a coll of connection-ids, or a `(fn [registry])` filter (host-defined audience).
 - **Validation gate**: every inbound POST message and every outbound SSE event is validated against Malli schemas (`validation.clj`); invalid outbound events are logged server-side and replaced by a `:system-notification` so browsers never receive malformed events.
+
+## Hexholds (H3 hexagon grid)
+
+Toggleable H3 res-5 hexagon grid over the globe: hover highlights a cell (teal LineLoop), click cycles a cell through red → blue → green → yellow → purple → uncoloured; paints are shared live between users via SSE. Implemented per `docs/hexholds-feature-prompt.md`; see that doc for the full spec + pitfalls (P1–P18).
+
+- **Server** (`src/is/galt/globo/server/hexholds.clj`): `HexholdStore` protocol (protocols.clj) + `InMemoryHexholdStore` (`paint-hexhold!` keywordizes string colors, nil clears; `hexhold-colors` sparse map; `query-hexholds` filters ocean cells against a land index). `load-land-index` reads a classpath resource (one hex-id per line); nil land index = all-land dev fallback. Wired into `create-globo` (`:hexholds` opt), `routes` (POST `<mount>/hexholds/query`), SSE initial burst (`:hexholds` event), and `messages/process` (`:paint-hexhold` → `:hexholds-updated` broadcast). Inbound color values are **strings** on the wire (JSON); outbound enum schemas use keywords.
+- **Client** (`src/is/galt/globo/ui/hexholds.cljs`): pure helpers — `latlng->cell`, `cell->latlng` (h3 returns `[lat lng]` arrays), `cell-boundary-ring`, `point-in-polygon?` (strict even-odd, shared borders belong to no cell), `viewport-cells` (bbox from viewpoint, capped at 1500 via pre-shrink), `next-color` cycle, `fill-color`/`hexhold->props` (hover-independent polygon materials), `polygon-feature` (GeoJSON).
+- **Client layer** (`ui/presentation/map.cljs`): three-globe `polygons` layer (materials mutated in place on same cached JS objects — no geometry rebuild on paint/hover); screen-space hit-test via manual NDC projection (three 0.184 removed `Camera.project`; canvas-space ring cache keyed on `version|camera|canvas`); own pointer listeners on the renderer canvas (three-render-objects' click pipeline is broken for real mice, P6); hover highlight LineLoop at altitude 1.02; 250ms-debounced viewport refresh on zoom + 120ms-debounced polygon sync. LOD gate: cells only queried/drawn at camera altitude ≤ 0.8; toggling ON above LOD shows the "Zoom in to see hexholds" toast.
+- **Events** (`ui/events.cljs`): `::toggle-hexholds`, `::refresh-hexholds-viewport` (fetch `:hexholds/query`), `::hexholds-query-success/-failure`, `::hexholds-colors` (SSE burst), `::hexhold-updated` (optimistic + server echo), `::set-hexhold-hover`, `::paint-hexhold-at`, plus `::sync-hexholds`/`::update-hexhold-highlight`/`::schedule-hexholds-sync` fxs.
+- **Tests**: `test/is/galt/globo/ui/hexholds_test.cljs` (35/167 — pure helpers incl. shared-edge strictness, T1–T4 acceptance shapes) + `test/is/galt/globo/server/hexholds_test.clj` (store round-trip, ocean filtering, land index).
 
 ## Development Workflow
 

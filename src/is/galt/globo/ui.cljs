@@ -30,6 +30,10 @@
    :favorites []
    :rings {}
    :message-arcs {}
+   :hexholds {:active? false
+              :colors {}
+              :visible []
+              :hover-id nil}
    :system-notifications []
    :hud-open? true
    :models-ready? false})
@@ -45,11 +49,12 @@
    (let [assets-base-url (or assets-base-url (str globo-api-base-url "/assets"))]
       {:db (-> default-db
                (assoc-in [:system-state :is-mobile?] is-mobile?)
-               (assoc :config {:globo-api-base-url globo-api-base-url
-                               :assets-base-url assets-base-url
-                               :connection-url (str globo-api-base-url "/connection")
-                               :send-message-url (str globo-api-base-url "/send-message")
-                               :max-favorite-places 3}))
+                (assoc :config {:globo-api-base-url globo-api-base-url
+                                :assets-base-url assets-base-url
+                                :connection-url (str globo-api-base-url "/connection")
+                                :send-message-url (str globo-api-base-url "/send-message")
+                                :hexholds-query-url (str globo-api-base-url "/hexholds/query")
+                                :max-favorite-places 3}))
       :fx [[:dispatch [:is.galt.globo.ui.connection.events/initialize]]]})))
 
 (defn ^:export init

@@ -82,3 +82,23 @@
  ::system-notifications
  (fn [db _]
    (get-in db [:system-notifications])))
+
+(rf/reg-sub
+ ::hexholds-active?
+ (fn [db _]
+   (get-in db [:hexholds :active?])))
+
+(rf/reg-sub
+ ::hexholds-visible
+ (fn [db _]
+   (get-in db [:hexholds :visible])))
+
+(rf/reg-sub
+ ::hexholds-hover-id
+ (fn [db _]
+   (get-in db [:hexholds :hover-id])))
+
+(rf/reg-sub
+ ::hexholds-colors
+ (fn [db _]
+   (get-in db [:hexholds :colors])))

@@ -122,6 +122,16 @@
                         event)
       (publish/publish! globo :everybody event))))
 
+(defn paint-hexhold
+  "Store a hexhold paint (or clear when :color is nil) and broadcast the
+  change to everybody."
+  [{:keys [globo]} {:keys [content]}]
+  (let [result (protocols/paint-hexhold! (:hexholds globo)
+                                         (:hex-id content)
+                                         (:color content))]
+    (publish/publish! globo :everybody
+                      {:type :hexholds-updated :content result})))
+
 (defn process
   "Dispatch an inbound message. Returns the boolean result of the final
   publish (false when nobody was reached)."
@@ -131,6 +141,7 @@
     :update-user (update-user {:globo globo :user-id user-id} message)
     :update-favorite (update-favorite {:globo globo :user-id user-id} message)
     :add-favorite (add-favorite {:globo globo :user-id user-id} message)
+    :paint-hexhold (paint-hexhold {:globo globo :user-id user-id} message)
     :user-offline (user-offline {:globo globo :user-id user-id} message)
     :user-online (publish/publish! globo :everybody message)
     :broadcast (publish/publish! globo :everybody message)

@@ -32,13 +32,14 @@
 (deftest initial-burst-events-test
   (let [g (make-globo)
         events (handlers/initial-burst-events g "c-new" "u1")]
-    (is (= [:connected :map-objects :users-online :messages :placeable-map-objects]
+    (is (= [:connected :map-objects :users-online :messages :placeable-map-objects :hexholds]
            (mapv :type events)))
     (is (= {:connection-id "c-new" :user-id "u1"} (:content (first events))))
     (is (= {:objects #{}} (:content (second events))))
     (is (= {:users []} (:content (nth events 2))))
     (is (= {:messages []} (:content (nth events 3))))
-    (is (= {:objects placeables/default-config} (:content (last events))))))
+    (is (= {:objects placeables/default-config} (:content (nth events 4))))
+    (is (= {:colors {}} (:content (last events))))))
 
 (deftest safe-sse-event-test
   (let [g (make-globo)]
@@ -56,7 +57,7 @@
   (let [g (make-globo)
         body (handlers/initial-burst-body g "c-new" "u1")]
     (is (string? body))
-    (is (= 5 (count (re-seq #"data: " body))))))
+    (is (= 6 (count (re-seq #"data: " body))))))
 
 (deftest send-message-handler-json-test
   (testing "string :op from a JSON body is keywordized and accepted"
@@ -106,3 +107,27 @@
           (is (= 200 (:status resp)))
           (is (= 1 (count favorites)))
           (is (= "" (:label (first favorites)))))))))
+
+(deftest hexholds-query-handler-test
+  (testing "valid request returns 200 with land cells joined with colors"
+    (let [g (globo/create-globo {:hexholds (is.galt.globo.server.hexholds/in-memory-hexhold-store
+                                            #{"a" "b"})})
+          _ (protocols/paint-hexhold! (:hexholds g) "b" :red)
+          body (json/generate-string {:cells ["a" "b" "ocean"]})
+          resp (handlers/hexholds-query-handler g
+                                                {:body (io/input-stream (.getBytes body))})]
+      (is (= 200 (:status resp)))
+      (is (= [{"id" "a" "color" nil} {"id" "b" "color" "red"}]
+             (->> (-> resp :body json/parse-string (get "hexholds"))
+                  (sort-by #(get % "id")))))))
+  (testing "malformed body returns 400"
+    (let [g (make-globo)
+          resp (handlers/hexholds-query-handler g
+                                                {:body (io/input-stream (.getBytes "not json"))})]
+      (is (= 400 (:status resp)))))
+  (testing "non-string cells return 400"
+    (let [g (make-globo)
+          body (json/generate-string {:cells [1 2]})
+          resp (handlers/hexholds-query-handler g
+                                                {:body (io/input-stream (.getBytes body))})]
+      (is (= 400 (:status resp))))))

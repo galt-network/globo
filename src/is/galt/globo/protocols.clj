@@ -72,3 +72,19 @@
   (placeable-objects
     [this user-id]
     "Vector of placeable-object config maps for user-id."))
+
+(defprotocol HexholdStore
+  "Shared state for the hexholds (H3 hexagon paint) feature."
+  (paint-hexhold!
+    [this hex-id color]
+    "Paint hex-id with a color keyword, or clear when color is nil.
+     Returns {:id hex-id :color color-or-nil}.")
+  (hexhold-colors
+    [this]
+    "Sparse map of hex-id-string -> color-keyword for all painted cells.")
+  (query-hexholds
+    [this cell-ids]
+    "Intersect cell-ids with the land index. Returns a vector of
+     {:id string :color (maybe keyword)} for land cells only; unpainted
+     land cells have :color nil. When the land index is nil every
+     requested cell counts as land (dev fallback)."))
