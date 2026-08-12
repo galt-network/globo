@@ -374,12 +374,6 @@
    (ui.map/sync-hexholds-from-db! visible)))
 
 (rf/reg-fx
- ::update-hexhold-highlight
- (fn [hover-id]
-   (when-let [g @ui.map/globe-instance]
-     (ui.map/update-hexhold-highlight! g hover-id))))
-
-(rf/reg-fx
  ::update-hexhold-hover-tint
  (fn [{:keys [from-id to-id colors]}]
    (ui.map/set-hexhold-hover-tint! from-id to-id colors)))
@@ -400,14 +394,18 @@
  (fn [{:keys [db globe-viewpoint]} _]
    (let [active? (get-in db [:hexholds :active?])
          db' (assoc-in db [:hexholds :active?] (not active?))]
-     (if active?
-       ;; turning OFF: clear grid, hover, highlight
-       (let [db'' (-> db'
-                      (assoc-in [:hexholds :visible] [])
-                      (assoc-in [:hexholds :hover-id] nil))]
-         {:db db''
-          :fx [[::sync-hexholds {:visible []}]
-               [::update-hexhold-highlight nil]]})
+      (if active?
+        ;; turning OFF: clear grid + hover, restore the hovered cell's
+        ;; painted stroke/fill
+        (let [db'' (-> db'
+                       (assoc-in [:hexholds :visible] [])
+                       (assoc-in [:hexholds :hover-id] nil))]
+          {:db db''
+           :fx [[::sync-hexholds {:visible []}]
+                [::update-hexhold-hover-tint
+                 {:from-id (get-in db [:hexholds :hover-id])
+                  :to-id nil
+                  :colors (get-in db [:hexholds :colors])}]]})
        ;; turning ON
        (if (hexholds/within-lod? (:altitude globe-viewpoint))
          {:db db'
@@ -436,12 +434,16 @@
                         :on-failure [::hexholds-query-failure]}]]}
          {:db db'
           :fx [[::sync-hexholds {:visible []}]]}))
-     ;; out of gate: clear grid + hover
-     {:db (-> db
-              (assoc-in [:hexholds :visible] [])
-              (assoc-in [:hexholds :hover-id] nil))
-      :fx [[::sync-hexholds {:visible []}]
-           [::update-hexhold-highlight nil]]})))
+      ;; out of gate: clear grid + hover, restore the hovered cell's
+      ;; painted stroke/fill
+      {:db (-> db
+               (assoc-in [:hexholds :visible] [])
+               (assoc-in [:hexholds :hover-id] nil))
+       :fx [[::sync-hexholds {:visible []}]
+            [::update-hexhold-hover-tint
+             {:from-id (get-in db [:hexholds :hover-id])
+              :to-id nil
+              :colors (get-in db [:hexholds :colors])}]]})))
 
 (rf/reg-event-fx
  ::hexholds-query-success
@@ -494,13 +496,12 @@
  (fn [{:keys [db]} [_ hex-id]]
    (let [active? (get-in db [:hexholds :active?])
          current (get-in db [:hexholds :hover-id])]
-     (when (and active? (not= hex-id current))
-       {:db (assoc-in db [:hexholds :hover-id] hex-id)
-        :fx [[::update-hexhold-highlight hex-id]
-             [::update-hexhold-hover-tint
-              {:from-id current
-               :to-id hex-id
-               :colors (get-in db [:hexholds :colors])}]]}))))
+      (when (and active? (not= hex-id current))
+        {:db (assoc-in db [:hexholds :hover-id] hex-id)
+         :fx [[::update-hexhold-hover-tint
+               {:from-id current
+                :to-id hex-id
+                :colors (get-in db [:hexholds :colors])}]]}))))
 
 (rf/reg-event-fx
  ::paint-hexhold-at

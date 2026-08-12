@@ -27,12 +27,17 @@
 (def unpainted-fill "rgba(255, 255, 255, 0.08)")
 (def unpainted-hover-fill "rgba(255, 255, 255, 0.22)")
 (def default-stroke "rgba(255, 255, 255, 0.7)")
+;; The hover outline is the cell's OWN stroke, tinted teal. The polygons
+;; layer renders strokes at scale 1 + alt + 1e-4 — exactly on top of the
+;; caps — so any separate outline layer at cap altitude is covered by the
+;; stroke and invisible. Tinting the stroke keeps the outline aligned to
+;; the cell border by construction, at any camera angle.
+(def highlight-stroke-color "rgba(0, 188, 212, 1)")
 ;; Altitudes are RELATIVE to the globe radius: r = R * (1 + alt). The
 ;; polygons layer renders caps at scale 1 + polygon-altitude, so hit-test
-;; rings and the hover highlight MUST use the same convention.
+;; rings MUST use the same convention (r = R*(1+ring-altitude) = 100.5).
 (def polygon-altitude 0.005)
 (def ring-altitude polygon-altitude)
-(def highlight-altitude 0.02)
 
 (def cells-per-degree-2
   "Estimated cell count per square degree at the equator, computed from
@@ -58,6 +63,12 @@
    white hover tint."
   [color]
   (get color->hover-rgba color unpainted-hover-fill))
+
+(defn hover-stroke-color
+  "Border stroke for a cell: teal when hovered, else the default white
+   stroke."
+  [hovered?]
+  (if hovered? highlight-stroke-color default-stroke))
 
 (defn within-lod?
   "LOD gate: hexes render only at or below max-altitude."

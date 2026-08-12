@@ -46,8 +46,6 @@
 ;; Screen-space ring cache: {key -> {hex-id -> [[px py] ...]}} keyed by
 ;; camera state fingerprint (hexhold-cache-key).
 (defonce hexhold-ring-cache (atom {}))
-;; The hover highlight LineLoop currently in the scene.
-(defonce hexhold-highlight (atom nil))
 ;; Own canvas listeners + click state for hexhold hit-testing.
 (defonce hexhold-move-handler (atom nil))
 ;; Debounced sync timer handle (::schedule-hexholds-sync batches paint
@@ -136,14 +134,16 @@
       clj->js))
 
 (defn- apply-hover-tint!
-  "Re-apply the hover tint to the currently hovered cell after a paint or
-   rebuild sync (both reset cap-color to the painted fill)."
+  "Re-apply the hover tint (fill + teal border stroke) to the currently
+   hovered cell after a paint or rebuild sync (both reset cap-color and
+   stroke-color to the painted state)."
   []
   (let [app-db @rf.db/app-db
         hover-id (get-in app-db [:hexholds :hover-id])]
     (when-let [f (get @hexhold-cache hover-id)]
       (aset f "cap-color" (hexholds/hover-fill-color
                            (get-in app-db [:hexholds :colors hover-id])))
+      (aset f "stroke-color" hexholds/highlight-stroke-color)
       (when-let [g @globe-instance]
         (j/call g :polygonsData @hexholds-data)))))
 
@@ -177,19 +177,24 @@
         (apply-hover-tint!)))))
 
 (defn set-hexhold-hover-tint!
-  "Cap-color transition for a hover change: the previously hovered cell
-   (from-id) reverts to its painted fill, the newly hovered cell (to-id)
-   gets the hover tint. Mutates the cached JS features in place — no
-   geometry rebuild."
+  "Hover transition for a hover change: the previously hovered cell
+   (from-id) reverts to its painted fill + white stroke, the newly hovered
+   cell (to-id) gets the hover fill + teal border stroke. The teal stroke
+   is the cell's OWN border (rendered by the polygons layer at 1+alt+1e-4,
+   exactly over the caps) — so the outline is pixel-aligned with the cell
+   by construction, at any camera angle. Mutates the cached JS features in
+   place — no geometry rebuild."
   [from-id to-id colors]
   (let [cache @hexhold-cache
         from-f (when from-id (get cache from-id))
         to-f (when to-id (get cache to-id))]
     (when (or from-f to-f)
       (when from-f
-        (aset from-f "cap-color" (hexholds/fill-color (get colors from-id))))
+        (aset from-f "cap-color" (hexholds/fill-color (get colors from-id)))
+        (aset from-f "stroke-color" hexholds/default-stroke))
       (when to-f
-        (aset to-f "cap-color" (hexholds/hover-fill-color (get colors to-id))))
+        (aset to-f "cap-color" (hexholds/hover-fill-color (get colors to-id)))
+        (aset to-f "stroke-color" hexholds/highlight-stroke-color))
       (when-let [g @globe-instance]
         (j/call g :polygonsData @hexholds-data)))))
 
@@ -261,28 +266,6 @@
     (when hit
       (let [{:keys [lat lng]} (hexholds/cell->latlng hit)]
         {:hex-id hit :lat lat :lng lng}))))
-
-(defn update-hexhold-highlight!
-  "Replace the hover highlight LineLoop (teal, R*(1+highlight-altitude) so
-   it renders above the polygon caps) for hover-id, or remove it when nil."
-  [globe hover-id]
-  (when globe
-    (when-let [line @hexhold-highlight]
-      (j/call (j/call globe :scene) :remove line)
-      (j/call (j/get line :geometry) :dispose)
-      (j/call (j/get line :material) :dispose)
-      (reset! hexhold-highlight nil))
-    (when hover-id
-      (let [vertices (mapv (fn [[lng lat]]
-                             (let [v (j/call globe :getCoords lat lng hexholds/highlight-altitude)]
-                               (THREE/Vector3. (.-x v) (.-y v) (.-z v))))
-                           (hexholds/cell-boundary-ring hover-id))
-            geometry (THREE/BufferGeometry.)
-            material (THREE/LineBasicMaterial. #js {:color 0x00bcd4})
-            line (THREE/LineLoop. geometry material)]
-        (j/call geometry :setFromPoints (clj->js vertices))
-        (j/call (j/call globe :scene) :add line)
-        (reset! hexhold-highlight line)))))
 
 (def hover-throttle-ms 30)
 (def click-max-drift-px 5)
@@ -537,9 +520,9 @@
     (reset! arc-timers {})
     (reset! arcs-data (new js/Array))
     (rf/dispatch [:is.galt.globo.ui.events/clear-message-arcs])
-    ;; 6. Hexholds: remove own canvas listeners, drop the highlight line
-    ;; from the scene, cancel pending timers, reset layer state. The
-    ;; app-db :hexholds :visible is re-synced on the next mount.
+    ;; 6. Hexholds: remove own canvas listeners, cancel pending timers,
+    ;; reset layer state. The app-db :hexholds :visible is re-synced on
+    ;; the next mount.
     (when-let [{:keys [hover-handler down-handler up-handler]} @hexhold-move-handler]
       (try
         (let [canvas (j/get (j/call globe :renderer) :domElement)]
@@ -548,13 +531,6 @@
           (.removeEventListener canvas "pointerup" up-handler))
         (catch :default _))
       (reset! hexhold-move-handler nil))
-    (when-let [line @hexhold-highlight]
-      (try
-        (j/call (j/call globe :scene) :remove line)
-        (j/call (j/get line :geometry) :dispose)
-        (j/call (j/get line :material) :dispose)
-        (catch :default _))
-      (reset! hexhold-highlight nil))
     (when-let [t @hexhold-sync-timer]
       (js/clearTimeout t)
       (reset! hexhold-sync-timer nil))
@@ -614,7 +590,6 @@
                                  ;; they survive hot-reloads.
                                  (sync-rings-from-db! (get-in @rf.db/app-db [:rings]))
                                  (sync-hexholds-from-db! (get-in @rf.db/app-db [:hexholds :visible]))
-                                 (update-hexhold-highlight! globe (get-in @rf.db/app-db [:hexholds :hover-id]))
                                  (resize!)
                                  (let [assets-base-url @(rf/subscribe [::ui.subs/assets-base-url])
                                        placeables (vals (get-in @rf.db/app-db [:placeable-map-objects]))]

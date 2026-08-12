@@ -359,9 +359,23 @@
 (deftest altitude-constants-test
   (testing "altitudes are RELATIVE to the globe radius (r = R * (1 + alt))"
     (is (= 0.005 hexholds/ring-altitude))
-    (is (= 0.02 hexholds/highlight-altitude))
-    (is (< hexholds/ring-altitude 0.1))
-    (is (< hexholds/highlight-altitude 0.1))))
+    (is (< hexholds/ring-altitude 0.1)))
+  (testing "ring-altitude is the SINGLE rendering altitude: hit-test rings,
+           caps and the hover outline all live at r = R*(1+ring-altitude).
+           The outline is the cell's OWN stroke, so it is in perfect
+           alignment by construction — no separate highlight altitude."
+    (is (= hexholds/polygon-altitude hexholds/ring-altitude))))
+
+(deftest hover-stroke-color-test
+  (testing "the hover outline is the cell's own border stroke, tinted teal"
+    (is (= "rgba(0, 188, 212, 1)" hexholds/highlight-stroke-color))
+    (testing "regression: identical stroke colors would make the highlight
+             invisible (the polygon stroke renders at 1+alt+1e-4, exactly
+             covering any separate outline layer)"
+      (is (not= hexholds/highlight-stroke-color hexholds/default-stroke)))
+    (is (= hexholds/highlight-stroke-color (hexholds/hover-stroke-color true)))
+    (is (= hexholds/default-stroke (hexholds/hover-stroke-color false)))
+    (is (= hexholds/default-stroke (hexholds/hover-stroke-color nil)))))
 
 (deftest click-paint-hexhold-test
   (let [cell-a (hexholds/latlng->cell 20 0)
