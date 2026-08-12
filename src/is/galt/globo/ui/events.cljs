@@ -33,11 +33,14 @@
 (rf/reg-cofx
  ::globe-viewpoint
  (fn [cofx]
-   (assoc cofx :globe-viewpoint
-          (some-> @ui.map/globe-instance
-                  (j/call :pointOfView)
-                  (js->clj :keywordize-keys true)
-                  (select-keys [:lat :lng :altitude])))))
+   (let [globe @ui.map/globe-instance]
+     (assoc cofx :globe-viewpoint
+            (when globe
+              (assoc (-> (j/call globe :pointOfView)
+                         (js->clj :keywordize-keys true)
+                         (select-keys [:lat :lng :altitude]))
+                     ;; camera aspect — hexhold viewport sizing needs it
+                     :aspect (.-aspect (j/call globe :camera))))))))
 
 (rf/reg-fx
  ::update-map-objects
@@ -421,8 +424,8 @@
  (fn [{:keys [db globe-viewpoint]} _]
    (if (and (get-in db [:hexholds :active?])
             (hexholds/within-lod? (:altitude globe-viewpoint)))
-     (let [cells (hexholds/viewport-cells (hexholds/viewpoint->bbox globe-viewpoint))
-           db' (assoc-in db [:hexholds :visible] [])]
+      (let [cells (hexholds/viewport-cells globe-viewpoint)
+            db' (assoc-in db [:hexholds :visible] [])]
          (if (seq cells)
           {:db db'
            :fx [[:fetch {:method :post

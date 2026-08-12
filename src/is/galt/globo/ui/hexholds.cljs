@@ -1,15 +1,16 @@
 (ns is.galt.globo.ui.hexholds
   "Pure helpers for the hexholds (H3 hexagon paint) feature. No side
   effects — fully unit tested. h3-js 4.5.0 API: latLngToCell,
-  cellToLatLng, polygonToCells, cellToBoundary, cellArea (string units)."
+  cellToLatLng, gridDisk, cellToBoundary, cellArea (string units)."
   (:require
    ["h3-js" :as h3]))
 
 (def resolution 5)
 (def max-altitude 0.8)
 (def max-viewport-cells 1500)
-(def viewport-span-factor 20)
-(def min-half-span 0.8)
+;; three-render-objects constructs `new three.PerspectiveCamera()` — the
+;; three.js default vertical FOV of 50 degrees.
+(def fov 50)
 (def color-cycle [nil :red :blue :green :yellow :purple])
 (def color->rgba
   {:red "rgba(220, 50, 50, 0.4)"
@@ -38,12 +39,6 @@
 ;; rings MUST use the same convention (r = R*(1+ring-altitude) = 100.5).
 (def polygon-altitude 0.005)
 (def ring-altitude polygon-altitude)
-
-(def cells-per-degree-2
-  "Estimated cell count per square degree at the equator, computed from
-  the actual h3 cell area (resolution-aware)."
-  (let [cell (h3/latLngToCell 0 0 resolution)]
-    (/ (* 111.32 111.32) (h3/cellArea cell "km2"))))
 
 (defn next-color
   "Cycle color-cycle forward: nil -> :red -> :blue -> :green -> :yellow
@@ -144,55 +139,88 @@
               [x2 y2] (nth ring (mod (inc i) n))]
           (recur (inc i) (+ area (- (* x1 y2) (* x2 y1)))))))))
 
-(defn viewpoint->bbox
-  "Bounding box half-span grows linearly with camera altitude
-   (span-factor degrees per unit altitude), floored at min-half-span."
-  ([viewpoint]
-   (viewpoint->bbox viewpoint viewport-span-factor))
-  ([{:keys [lat lng altitude]} span-factor]
-   (let [half-span (max min-half-span (* (or altitude 1) span-factor))
-         lat (or lat 0)
-         lng (or lng 0)]
-     {:lat-min (max -90 (- lat half-span))
-      :lat-max (min 90 (+ lat half-span))
-      :lng-min (- lng half-span)
-      :lng-max (+ lng half-span)})))
+(defn- deg->rad
+  [d]
+  (* d (/ js/Math.PI 180)))
 
-(defn- cells-in-bbox
-  "All h3 cells intersecting the bbox polygon."
-  [bbox]
-  (h3/polygonToCells
-   (clj->js [[(:lat-min bbox) (:lng-min bbox)]
-             [(:lat-min bbox) (:lng-max bbox)]
-             [(:lat-max bbox) (:lng-max bbox)]
-             [(:lat-max bbox) (:lng-min bbox)]])
-   resolution
-   false))
+(defn- rad->deg
+  [r]
+  (* r (/ 180 js/Math.PI)))
+
+(defn- angular-distance-deg
+  "Great-circle angular distance (degrees) between two lat/lng points."
+  [lat1 lng1 lat2 lng2]
+  (let [dlat (deg->rad (- lat2 lat1))
+        dlng (deg->rad (- lng2 lng1))
+        a (+ (* (js/Math.sin (/ dlat 2)) (js/Math.sin (/ dlat 2)))
+             (* (js/Math.cos (deg->rad lat1))
+                (js/Math.cos (deg->rad lat2))
+                (js/Math.sin (/ dlng 2))
+                (js/Math.sin (/ dlng 2))))]
+    (rad->deg (* 2 (js/Math.asin (js/Math.sqrt a))))))
+
+(defn- frustum-corner-half-angle
+  "Frustum half-angle (degrees) along the screen-corner ray: the viewport
+   diagonal extends the vertical half-angle by sqrt(1 + aspect^2)."
+  [aspect]
+  (rad->deg (js/Math.atan (* (js/Math.tan (deg->rad (/ fov 2)))
+                             (js/Math.sqrt (inc (* aspect aspect)))))))
+
+(defn cap-angle-deg
+  "Angular radius (degrees) of the globe cap visible in the viewport along
+   the screen-corner ray, at camera altitude `a` (a = d/R - 1) and screen
+   `aspect`. 90 when the whole globe fits (the corner ray misses the
+   sphere)."
+  [altitude aspect]
+  (let [a (or altitude 0)
+        phi (deg->rad (frustum-corner-half-angle (or aspect 1)))
+        s (js/Math.sin phi)
+        c (js/Math.cos phi)
+        d (* (inc a) s)]
+    (if (>= d 1)
+      90
+      (rad->deg (js/Math.acos (- (inc a)
+                                 (* c (- (* (inc a) c)
+                                         (js/Math.sqrt (- 1 (* d d)))))))))))
+
+(defn ring-spacing-deg
+  "Mean center-to-center distance (degrees) from `center-cell` to its six
+   gridDisk-1 neighbors — the lattice spacing, self-adapting to the local
+   icosahedral distortion."
+  [center-cell]
+  (let [{center-lat :lat center-lng :lng} (cell->latlng center-cell)]
+    (/ (->> (h3/gridDisk center-cell 1)
+            (remove #(= % center-cell))
+            (map (fn [c]
+                   (let [{lat :lat lng :lng} (cell->latlng c)]
+                     (angular-distance-deg center-lat center-lng lat lng))))
+            (reduce +))
+       6)))
+
+(defn- max-k
+  "Largest gridDisk k whose cell count (3k^2+3k+1) fits within max-cells."
+  [max-cells]
+  (js/Math.floor (/ (- (js/Math.sqrt (- (* 12 max-cells) 3)) 3) 6)))
+
+(defn disk-k
+  "gridDisk radius for a viewpoint: the smallest k whose patch reaches the
+   viewport corner (k >= cap-angle / ring-spacing), capped at
+   max-viewport-cells. The cap is a plateau — the count never shrinks with
+   altitude, it saturates."
+  [{:keys [lat lng altitude aspect]}]
+  (let [spacing (ring-spacing-deg (latlng->cell (or lat 0) (or lng 0)))
+        k (js/Math.ceil (/ (cap-angle-deg altitude aspect) spacing))]
+    (js/Math.min k (max-k max-viewport-cells))))
 
 (defn viewport-cells
-  "Cell-ids inside the bbox, capped at max-viewport-cells. When the
-   estimate exceeds the cap the bbox is pre-shrunk toward its center by
-   sqrt(cap/estimate) BEFORE the polygonToCells call, so the query never
-   explodes."
-  [bbox]
-  (let [estimate (* cells-per-degree-2
-                    (* (- (:lat-max bbox) (:lat-min bbox))
-                       (- (:lng-max bbox) (:lng-min bbox))))]
-    (if (<= estimate max-viewport-cells)
-      (cells-in-bbox bbox)
-      (let [factor (js/Math.sqrt (/ max-viewport-cells estimate))
-            lat-min (:lat-min bbox)
-            lat-max (:lat-max bbox)
-            lng-min (:lng-min bbox)
-            lng-max (:lng-max bbox)
-            half-lat (* (- lat-max lat-min) factor 0.5)
-            half-lng (* (- lng-max lng-min) factor 0.5)
-            mid-lat (/ (+ lat-min lat-max) 2)
-            mid-lng (/ (+ lng-min lng-max) 2)]
-        (cells-in-bbox {:lat-min (- mid-lat half-lat)
-                        :lat-max (+ mid-lat half-lat)
-                        :lng-min (- mid-lng half-lng)
-                        :lng-max (+ mid-lng half-lng)})))))
+  "Cell-ids of the hexagonal gridDisk patch around the viewpoint cell,
+   sized to cover the whole viewport (corner-to-corner) and capped at
+   max-viewport-cells. The patch is a hexagon by construction — h3 gridDisk
+   is index-space, so it is also safe across the antimeridian."
+  [viewpoint]
+  (h3/gridDisk (latlng->cell (or (:lat viewpoint) 0)
+                             (or (:lng viewpoint) 0))
+               (disk-k viewpoint)))
 
 (defn screen->ndc
   [px py width height]

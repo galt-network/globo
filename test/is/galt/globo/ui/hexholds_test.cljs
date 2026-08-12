@@ -66,57 +66,72 @@
   (testing "close zoom is within"
     (is (true? (hexholds/within-lod? 0.3)))))
 
-(deftest viewpoint->bbox-test
-  (testing "half-span = altitude * factor"
-    (let [bbox (hexholds/viewpoint->bbox {:lat 0 :lng 0 :altitude 0.3} 20)]
-      (is (< (:lng-min bbox) -5.99))
-      (is (> (:lng-min bbox) -6.01))
-      (is (< (:lng-max bbox) 6.01))
-      (is (> (:lng-max bbox) 5.99))
-      (is (<= (- (:lng-max bbox) (:lng-min bbox)) 12.1))))
-  (testing "span factor scales the half-span linearly"
-    (let [b16 (hexholds/viewpoint->bbox {:lat 0 :lng 0 :altitude 1} 16)
-          b8 (hexholds/viewpoint->bbox {:lat 0 :lng 0 :altitude 1} 8)
-          span16 (- (:lng-max b16) (:lng-min b16))
-          span8 (- (:lng-max b8) (:lng-min b8))]
-      (is (> span16 span8))
-      (is (< (js/Math.abs (- span16 (* 2 span8))) 0.1))))
-  (testing "lat clamped to poles"
-    (let [bbox (hexholds/viewpoint->bbox {:lat 90 :lng 0 :altitude 1} 20)
-          bbox2 (hexholds/viewpoint->bbox {:lat -90 :lng 0 :altitude 1} 20)]
-      (is (<= (:lat-max bbox) 90))
-      (is (>= (:lat-min bbox) -90))
-      (is (= 90 (:lat-max bbox)))
-      (is (= -90 (:lat-min bbox2)))
-      (is (>= (:lat-max bbox2) -90))))
-  (testing "min-half-span floor at tiny altitude"
-    (let [span (- (:lng-max (hexholds/viewpoint->bbox {:lat 0 :lng 0 :altitude 0.01} 20))
-                  (:lng-min (hexholds/viewpoint->bbox {:lat 0 :lng 0 :altitude 0.01} 20)))]
-      (is (< (js/Math.abs (- span (* 2 hexholds/min-half-span))) 0.001)))))
+(deftest cap-angle-deg-test
+  (testing "whole globe visible from far away (rays miss the sphere)"
+    (is (= 90 (hexholds/cap-angle-deg 0.8 1.0393))))
+  (testing "corner cap angle grows with altitude"
+    (is (< (hexholds/cap-angle-deg 0.05 1.0393)
+           (hexholds/cap-angle-deg 0.15 1.0393))))
+  (testing "corner cap angle grows with aspect (wider screen)"
+    (is (< (hexholds/cap-angle-deg 0.08 1)
+           (hexholds/cap-angle-deg 0.08 2))))
+  (testing "reference: live camera (alt 0.08, aspect 1.0393) ~ 3.14 deg"
+    (is (< (js/Math.abs (- (hexholds/cap-angle-deg 0.08 1.0393) 3.142)) 0.05))))
+
+(deftest ring-spacing-deg-test
+  (testing "equatorial mean spacing ~ 0.14 deg (anisotropic near icosahedron edges)"
+    (let [s (hexholds/ring-spacing-deg (hexholds/latlng->cell 0 0))]
+      (is (< 0.1 s 0.2))))
+  (testing "clean lattice (lat 60) ~ 0.133 deg"
+    (is (< (js/Math.abs (- (hexholds/ring-spacing-deg
+                            (hexholds/latlng->cell 60 20)) 0.133))
+           0.01))))
+
+(deftest disk-k-test
+  (testing "k grows with altitude"
+    (is (< (hexholds/disk-k {:lat 0 :lng 0 :altitude 0.05 :aspect 1.0393})
+           (hexholds/disk-k {:lat 0 :lng 0 :altitude 0.15 :aspect 1.0393}))))
+  (testing "k plateaus (capped) once the cap is reached"
+    (is (= (hexholds/disk-k {:lat 20 :lng 0 :altitude 0.5 :aspect 1.0393})
+           (hexholds/disk-k {:lat 20 :lng 0 :altitude 0.8 :aspect 1.0393}))))
+  (testing "k is non-negative for any viewpoint"
+    (is (>= (hexholds/disk-k {:lat 20 :lng 0 :altitude 0.8 :aspect 1.0393}) 0))
+    (is (>= (hexholds/disk-k {:lat 20 :lng 0 :altitude 0 :aspect 1}) 0))))
+
+(deftest viewport-cells-hexagon-test
+  (testing "cells form the exact k-disk around the viewpoint cell (hexagon shape)"
+    (let [v {:lat 20 :lng 0 :altitude 0.05 :aspect 1.0393}
+          k (hexholds/disk-k v)
+          cells (hexholds/viewport-cells v)
+          center (hexholds/latlng->cell 20 0)]
+      (is (pos? k))
+      (is (= (set (h3/gridDisk center k)) (set cells))))
+    (testing "disk size follows 3k^2+3k+1"
+      (let [v {:lat 20 :lng 0 :altitude 0.05 :aspect 1.0393}
+            k (hexholds/disk-k v)
+            cells (hexholds/viewport-cells v)]
+        (is (= (inc (* 3 k (inc k))) (count cells)))))))
 
 (deftest viewport-cells-capped-test
-  (testing "huge bbox capped at max-viewport-cells"
-    (let [cells (hexholds/viewport-cells {:lat-min -10 :lat-max 10
-                                          :lng-min -10 :lng-max 10})]
+  (testing "far zoom (alt 0.8) saturates at max-viewport-cells, never above"
+    (let [cells (hexholds/viewport-cells
+                 {:lat 20 :lng 0 :altitude 0.8 :aspect 1.0393})]
       (is (pos? (count cells)))
       (is (<= (count cells) hexholds/max-viewport-cells))))
-  (testing "small bbox uncapped"
-    (let [cells (hexholds/viewport-cells {:lat-min 19.5 :lat-max 20.5
-                                          :lng-min -0.5 :lng-max 0.5})]
+  (testing "deep zoom (alt 0.05) is a small hexagon well below the cap"
+    (let [cells (hexholds/viewport-cells
+                 {:lat 20 :lng 0 :altitude 0.05 :aspect 1.0393})]
       (is (pos? (count cells)))
-      (is (< (count cells) hexholds/max-viewport-cells))))
-  (testing "close zoom yields many cells (density regression guard)"
-    (let [bbox (hexholds/viewpoint->bbox {:lat 20 :lng 0 :altitude 0.3} 20)
-          cells (hexholds/viewport-cells bbox)]
-      (is (> (count cells) 100))))
-  (testing "all cells are within (or straddle) the queried bbox"
-    (let [cells (hexholds/viewport-cells {:lat-min 19 :lat-max 21
-                                          :lng-min -1 :lng-max 1})
-          out (remove (fn [c]
-                        (let [{:keys [lat lng]} (hexholds/cell->latlng c)]
-                          (and (< -1.2 lat 21.2) (< -1.2 lng 1.2))))
-                      cells)]
-      (is (empty? out)))))
+      (is (< (count cells) hexholds/max-viewport-cells)))))
+
+(deftest viewport-coverage-test
+  (testing "patch circumradius reaches the viewport corner while below the cap"
+    (doseq [alt [0.03 0.05 0.08]]
+      (let [center (hexholds/latlng->cell 20 0)
+            k (hexholds/disk-k {:lat 20 :lng 0 :altitude alt :aspect 1.0393})]
+        (is (>= (* k (hexholds/ring-spacing-deg center))
+                (hexholds/cap-angle-deg alt 1.0393))
+            (str "alt " alt ": k * ring-spacing must cover the corner angle"))))))
 
 (deftest latlng-cell-round-trip-test
   (testing "cell->latlng of latlng->cell is the same cell"
@@ -282,11 +297,6 @@
       (is (= "Polygon" (get-in feature [:geometry :type])))
       (is (= (mapv vec (hexholds/cell-boundary-ring cell))
              (mapv vec (get-in feature [:geometry :coordinates 0])))))))
-
-(deftest cells-per-degree-2-sane-test
-  (testing "density constant is resolution-aware (res 5 ~ tens of cells/deg2)"
-    (is (> hexholds/cells-per-degree-2 30))
-    (is (< hexholds/cells-per-degree-2 200))))
 
 (deftest cell->latlng-shape-test
   (testing "returns a map with numeric lat/lng (h3-js returns an array)"
