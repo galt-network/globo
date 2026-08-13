@@ -1,8 +1,9 @@
 (ns is.galt.globo.ui.subscriptions
   "Re-frame subscriptions for app UI state."
   (:require
-   [is.galt.globo.ui.hexholds :as hexholds]
-   [re-frame.core :as rf]))
+    [is.galt.globo.ui.hexholds :as hexholds]
+    [is.galt.globo.user-figure :as uf]
+    [re-frame.core :as rf]))
 
 (rf/reg-sub
  ::hud-open?
@@ -61,7 +62,8 @@
 (rf/reg-sub
  ::placeable-map-objects
  (fn [db _]
-   (vals (get-in db [:placeable-map-objects]))))
+    (remove #(uf/user-figure-model? (:model-id %))
+            (vals (get-in db [:placeable-map-objects])))))
 
 (rf/reg-sub
  ::is-mobile?

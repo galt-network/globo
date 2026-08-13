@@ -254,6 +254,31 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (messages/process {:globo g :user-id "u1"} {:type :bogus :content {}}))))))
 
+(deftest update-user-too-close-test
+  (let [g (make-globo) sent (atom [])
+        loc {:lat 0.0 :lng 0.0
+             :model {:id "user-figure-parts" :scale 0.15 :color "blue"}}]
+    (protocols/update-user! (:storage g) "u2" #(assoc % :location loc))
+    (let [result (with-recording-send! sent
+                   #(messages/process {:globo g :user-id "u1"}
+                                      {:type :update-user :content {:id "u1" :location loc}}))]
+      (is (= :rejected (:status result)))
+      (is (= "Too close to an existing user" (:error result)))
+      (is (nil? (:location (protocols/get-user (:storage g) "u1"))))
+      (is (empty? @sent)))))
+
+(deftest update-user-stores-model-test
+  (let [g (make-globo) sent (atom [])
+        loc {:lat 10.0 :lng 20.0
+             :model {:id "user-figure-parts" :scale 0.15 :color "blue"}}]
+    (with-recording-send! sent
+      #(is (true? (messages/process {:globo g :user-id "u1"}
+                                    {:type :update-user :content {:id "u1" :location loc}}))))
+    (is (= {:lat 10.0 :lng 20.0
+            :model {:id "user-figure-parts" :scale 0.15 :color :blue}}
+           (:location (protocols/get-user (:storage g) "u1"))))
+    (is (= "blue" (get-in (recorded-event sent) [:content :location :model :color])))))
+
 (deftest latest-messages-test
   (let [s (storage/in-memory-globo-storage)
         msgs (mapv (fn [i] {:id i}) (range 25))]

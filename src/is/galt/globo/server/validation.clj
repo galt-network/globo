@@ -12,7 +12,16 @@
 ;; Shared sub-schemas
 
 (def Location
-  [:map [:lat number?] [:lng number?]])
+  [:map
+   [:lat number?]
+   [:lng number?]
+   [:model {:optional true}
+    [:map
+     [:id string?]
+     [:scale number?]
+     [:color [:or
+              [:enum :red :blue :green :yellow :purple]
+              [:enum "red" "blue" "green" "yellow" "purple"]]]]]])
 
 (def Viewport
   [:map [:lat number?] [:lng number?] [:altitude number?]])

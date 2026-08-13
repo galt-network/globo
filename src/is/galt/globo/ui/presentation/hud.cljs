@@ -8,7 +8,8 @@
    [is.galt.globo.ui.hexholds :as hexholds]
    [is.galt.globo.ui.icons :refer [icon]]
    [is.galt.globo.ui.subscriptions :as ui.subs]
-   [is.galt.globo.ui.user-name :as user-name]
+    [is.galt.globo.ui.user-name :as user-name]
+    [is.galt.globo.user-figure :as uf]
    [re-frame.core :as rf]
    [reagent.core :as r]))
 
@@ -329,9 +330,22 @@
                       (if picking?
                         (rf/dispatch [::ui.events/clear-mouse-action])
                         (rf/dispatch [::ui.events/set-mouse-action {:type :pick-user-location}])))}
-         (if picking?
-           [icon :cancel "Cancel"]
-           [icon :pick-location "Pick on map"])]]]]]))
+          (if picking?
+            [icon :cancel "Cancel"]
+            [icon :pick-location "Pick on map"])]]]]
+      [panel-row
+       [:div.field
+        [:label.label.has-text-light-80 "Figure color"]
+        [:div.buttons.are-small
+         (for [c uf/palette-colors]
+           ^{:key (name c)}
+           [:button.button.is-small
+            {:class (when (= c (get-in user-location [:model :color]))
+                      "is-active is-outlined")
+             :style {:background (get uf/color->hex c)}
+             :disabled (not (uf/has-figure? current-user))
+             :title (name c)
+             :on-click #(rf/dispatch [::ui.events/set-figure-color c])}])]]]]))
 
 (defn hud-desktop-column
   [contents]

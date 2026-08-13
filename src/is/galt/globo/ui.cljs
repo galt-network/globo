@@ -28,8 +28,9 @@
         :user-name-save-error nil
         :user-name-draft nil}
    :messages []
-   :map-objects #{}
-   :placeable-map-objects {}
+    :map-objects #{}
+    :user-figures []
+    :placeable-map-objects {}
    :mouse-action nil
    :favorites []
    :rings {}

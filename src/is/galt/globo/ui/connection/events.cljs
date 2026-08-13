@@ -70,10 +70,11 @@
          new-objects (set/difference message-objects our-objects)]
      {:fx [[:dispatch [:is.galt.globo.ui.events/place-objects {:op :add :objects new-objects}]]]})))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::update-user
- (fn [db [_ user]]
-   (assoc-in db [:users (:id user)] user)))
+ (fn [{:keys [db]} [_ user]]
+   {:db (assoc-in db [:users (:id user)] user)
+    :fx [[:dispatch [:is.galt.globo.ui.events/sync-user-figures]]]}))
 
 (rf/reg-event-fx
  ::update-placeable-map-objects
@@ -138,23 +139,25 @@
  (fn [db [_ _]]
    (assoc-in db [:connection :status] :offline)))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::users-online
- (fn [db [_ {:keys [users] :as msg}]]
+ (fn [{:keys [db]} [_ {:keys [users]}]]
    (let [users-map (reduce (fn [acc u] (assoc acc (:id u) u)) {} users)
          self-id (get-in db [:connection :user-id])
          self-favs (get-in users-map [self-id :favorites])]
-     (cond-> (-> db
-                 (update-in ,,, [:connection :users-online] into (map :id users))
-                 (update-in ,,, [:users] merge users-map))
-       self-favs (assoc :favorites self-favs)))))
+     {:db (cond-> (-> db
+                      (update-in [:connection :users-online] into (map :id users))
+                      (update-in [:users] merge users-map))
+            self-favs (assoc :favorites self-favs))
+      :fx [[:dispatch [:is.galt.globo.ui.events/sync-user-figures]]]})))
 
-(rf/reg-event-db
+(rf/reg-event-fx
  ::user-online
- (fn [db [_ user]]
-   (-> db
-       (update-in ,,, [:connection :users-online] conj (:id user))
-       (assoc-in ,,, [:users (:id user)] user))))
+ (fn [{:keys [db]} [_ user]]
+   {:db (-> db
+            (update-in [:connection :users-online] conj (:id user))
+            (assoc-in [:users (:id user)] user))
+    :fx [[:dispatch [:is.galt.globo.ui.events/sync-user-figures]]]}))
 
 (rf/reg-event-db
  ::user-offline

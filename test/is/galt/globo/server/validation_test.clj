@@ -54,6 +54,37 @@
     (is (some? (validation/inbound-errors
                 {:type :paint-hexhold :content {:hex-id 42 :color "red"}})))))
 
+(deftest location-model-validation-test
+  (testing "location with model and string color is valid inbound"
+    (is (nil? (validation/inbound-errors
+               {:type :update-user
+                :content {:id "u1"
+                          :location {:lat 1 :lng 2
+                                     :model {:id "user-figure-parts"
+                                             :scale 0.15
+                                             :color "blue"}}}}))))
+  (testing "location missing lat is invalid"
+    (is (some? (validation/inbound-errors
+                {:type :update-user
+                 :content {:id "u1" :location {:lng 2}}}))))
+  (testing "model with unknown color is invalid"
+    (is (some? (validation/inbound-errors
+                {:type :update-user
+                 :content {:id "u1"
+                           :location {:lat 1 :lng 2
+                                      :model {:id "user-figure-parts"
+                                              :scale 0.15
+                                              :color "orange"}}}}))))
+  (testing "outbound user with keyword color is valid"
+    (is (nil? (validation/outbound-errors
+               {:type :update-user
+                :user-id "u1"
+                :content {:id "u1"
+                          :location {:lat 1 :lng 2
+                                     :model {:id "user-figure-parts"
+                                             :scale 0.15
+                                             :color :blue}}}})))))
+
 (deftest outbound-errors-test
   (testing "valid events pass"
     (is (nil? (validation/outbound-errors

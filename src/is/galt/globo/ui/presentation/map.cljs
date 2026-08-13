@@ -8,8 +8,9 @@
    ["three/examples/jsm/loaders/GLTFLoader.js" :as GLTFLoader]
    [applied-science.js-interop :as j]
    [camel-snake-kebab.core :as csk]
-   [is.galt.globo.ui.globe-gl-helpers :refer [apply-config!]]
-   [is.galt.globo.ui.hexholds :as hexholds]
+    [is.galt.globo.ui.globe-gl-helpers :refer [apply-config!]]
+    [is.galt.globo.ui.hexholds :as hexholds]
+    [is.galt.globo.user-figure :as uf]
    [is.galt.globo.ui.subscriptions :as ui.subs]
    [re-frame.core :as rf]
    [re-frame.db :as rf.db]
@@ -35,6 +36,7 @@
 ;; with the app-db :message-arcs map via sync-arcs-from-db!.
 (defonce arcs-data (atom (new js/Array)))
 (defonce arc-timers (atom {}))
+(defonce hop-timers (atom []))
 ;; Hexholds layer state. hexholds-data is the JS array handed to
 ;; globe.polygonsData; hexhold-cache maps hex-id -> the SAME JS feature
 ;; object, so color-only updates mutate materials in place (no geometry
@@ -381,13 +383,12 @@
 
 (defn remove-from-layer
   [layer-key obj]
-  [layer-key obj]
-  (let [id (:id obj)
+  (let [id (or (j/get obj :id) (:id obj))
         layer-objects (get @layer-data layer-key)
         idx (loop [i 0]
               (cond
                 (>= i (.-length layer-objects)) -1
-                (= id (aget layer-objects i :id)) i
+                (= id (j/get (aget layer-objects i) :id)) i
                 :else (recur (inc i))))]
     (if (neg? idx)
       false
@@ -442,21 +443,37 @@
     (let [url (str assets-base-url "/" path)]
       (load-gltf! url model-id nil))))
 
+(defn- recolor-object! [obj color]
+  (when-let [hex (get uf/color->hex (uf/normalize-color color))]
+    (let [n (js/parseInt (subs hex 1) 16)
+          clone-mat (fn [m]
+                      (let [c (j/call m :clone)]
+                        (j/assoc! c :vertexColors false)
+                        (when-let [col (j/get c :color)]
+                          (j/call col :setHex n))
+                        c))]
+      (j/call obj :traverse
+              (fn [child]
+                (when-let [mat (j/get child :material)]
+                  (j/assoc! child :material
+                            (if (js/Array.isArray mat)
+                              (to-array (map clone-mat mat))
+                              (clone-mat mat)))))))))
+
 (defn create-3d-object
   [d]
   (let [model-key (or (j/get d :model-id) "carrot")
         base (get @model-cache model-key)]
     (if base
-      ;; Clone so each placed object is independent
       (let [clone (j/call base :clone true)]
-        ;; Scale to reasonable size on globe (tweak per model)
         (j/update! clone :scale (fn [s] (j/call s :setScalar (j/get d :scale))))
-        ;; Optional: slight random rotation for variety
         (when-let [rot (j/get d :rotation)]
           (j/call clone :rotation :set
                   (or (j/get rot :x) 0)
                   (or (j/get rot :y) 0)
                   (or (j/get rot :z) 0)))
+        (when-let [color (j/get d :color)]
+          (recolor-object! clone color))
         clone)
       ;; Fallback simple marker while loading
       (let [geom (THREE/SphereGeometry. 0.5 16 16)
@@ -563,6 +580,9 @@
       (js/clearTimeout t))
     (reset! arc-timers {})
     (reset! arcs-data (new js/Array))
+    (doseq [t @hop-timers]
+      (js/clearTimeout t))
+    (reset! hop-timers [])
     (rf/dispatch [:is.galt.globo.ui.events/clear-message-arcs])
     ;; 6. Hexholds: remove own canvas listeners, cancel pending timers,
     ;; reset layer state. The app-db :hexholds :visible is re-synced on

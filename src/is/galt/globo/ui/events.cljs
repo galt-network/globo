@@ -5,12 +5,14 @@
    [applied-science.js-interop :as j]
    [clojure.set :as set]
    [clojure.string :as str]
-   [is.galt.globo.ui.hexholds :as hexholds]
-   [is.galt.globo.ui.hud-views :as hud-views]
-    [is.galt.globo.ui.message-arcs :as message-arcs]
-    [is.galt.globo.ui.models :as models]
-    [is.galt.globo.ui.presentation.map :as ui.map]
-    [is.galt.globo.ui.user-name :as user-name]
+    [is.galt.globo.ui.camera :as camera]
+    [is.galt.globo.ui.hexholds :as hexholds]
+    [is.galt.globo.ui.hud-views :as hud-views]
+   [is.galt.globo.ui.message-arcs :as message-arcs]
+   [is.galt.globo.ui.models :as models]
+   [is.galt.globo.ui.presentation.map :as ui.map]
+   [is.galt.globo.ui.user-name :as user-name]
+   [is.galt.globo.user-figure :as uf]
    [re-frame.core :as rf]))
 
 (defonce mobile-media-query-list
@@ -49,11 +51,11 @@
 (rf/reg-fx
  ::update-map-objects
  (fn [{:keys [op objects]}]
-    (case (keyword op)
-      :add (doseq [p objects] (ui.map/add-to-layer :custom-layer-data (clj->js p)))
-      :remove (doseq [p objects] (ui.map/remove-from-layer :custom-layer-data (clj->js p)))
-      :replace (do (ui.map/reset-layer! :custom-layer-data)
-                   (doseq [p objects] (ui.map/add-to-layer :custom-layer-data (clj->js p)))))))
+   (case (keyword op)
+     :add (doseq [p objects] (ui.map/add-to-layer :custom-layer-data (clj->js p)))
+     :remove (doseq [p objects] (ui.map/remove-from-layer :custom-layer-data (clj->js p)))
+     :replace (do (ui.map/reset-layer! :custom-layer-data)
+                  (doseq [p objects] (ui.map/add-to-layer :custom-layer-data (clj->js p)))))))
 
 (rf/reg-fx
  ::sync-rings
@@ -81,6 +83,15 @@
          h (hash (str rx ":" ry))]
      (str "p_" (js/Math.abs h)))))
 
+(defn figure-layer-fx [db]
+  (when (get db :models-ready?)
+    (let [next (uf/layer-objects (:users db))
+          {:keys [remove add]} (uf/sync-actions (or (:user-figures db) []) next)]
+      {:db (assoc db :user-figures next)
+       :fx (cond-> []
+             (seq remove) (conj [::update-map-objects {:op :remove :objects remove}])
+             (seq add) (conj [::update-map-objects {:op :add :objects add}]))})))
+
 (rf/reg-event-fx
  ::click-globe
  [(rf/inject-cofx ::globe-viewpoint)]
@@ -101,13 +112,34 @@
                            {:type :update-object :content point-action}]]]})
 
        :pick-user-location
-       (let [uid (get-in db [:connection :user-id])]
-         {:db (-> db
-                  (assoc-in [:users uid :location] point)
-                  (assoc-in [:mouse-action] nil))
-          :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
-                           {:type :update-user
-                            :content {:id uid :location point}}]]]})
+       (let [uid (get-in db [:connection :user-id])
+             result (uf/apply-pick (:users db) uid point
+                                   (get-in db [:users uid :location]))]
+         (if (= :too-close (:status result))
+           (do (js/console.log "Too close to an existing user")
+               {:db db})
+           (let [location (:location result)
+                 prev-location (get-in db [:users uid :location])
+                 db' (-> db
+                         (assoc-in [:users uid :location] location)
+                         (assoc-in [:mouse-action] nil))
+                 layer (figure-layer-fx db')]
+             {:db (get layer :db db')
+              :fx (into [[:fetch {:method :post
+                                  :url (get-in db [:config :send-message-url])
+                                  :body {:type :update-user
+                                         :connection-id (get-in db [:connection :connection-id])
+                                         :user-id uid
+                                         :content {:id uid :location location}}
+                                  :request-content-type :json
+                                  :response-content-types {#"application/.*json" :json}
+                                  :on-success [::pick-location-success]
+                                  :on-failure [::pick-location-failed prev-location]}]
+                         [::focus-globe {:lat (:lat location)
+                                         :lng (:lng location)
+                                         :altitude uf/focus-altitude
+                                         :duration uf/focus-ms}]]
+                        (or (:fx layer) []))})))
 
        :set-favorite
        (let [index (:index action)
@@ -154,11 +186,49 @@
  (fn [{:keys [db]} _]
     ;; Flip the gate and replace the custom layer with buffered
     ;; map-objects so leftover fallback spheres are dropped.
-    (let [db' (assoc db :models-ready? true)]
-      (if-let [action (models/flush-layer-action (get db :map-objects))]
-        {:db db'
-         :fx [[::update-map-objects action]]}
-        {:db db'}))))
+   (let [figures (uf/layer-objects (:users db))
+         objects (concat (seq (get db :map-objects)) figures)
+         db' (assoc db :models-ready? true :user-figures figures)]
+     (if-let [action (models/flush-layer-action objects)]
+       {:db db'
+        :fx [[::update-map-objects action]]}
+       {:db db'}))))
+
+(rf/reg-event-fx
+ ::sync-user-figures
+ (fn [{:keys [db]} _]
+   (or (figure-layer-fx db) {:db db})))
+
+(rf/reg-event-db
+ ::pick-location-success
+ (fn [db _]
+   db))
+
+(rf/reg-event-fx
+ ::pick-location-failed
+ (fn [{:keys [db]} [_ prev-location]]
+   (js/console.log "Too close to an existing user")
+   (let [uid (get-in db [:connection :user-id])
+         db' (assoc-in db [:users uid :location] prev-location)
+         layer (figure-layer-fx db')]
+     {:db (get layer :db db')
+      :fx (or (:fx layer) [])})))
+
+(rf/reg-event-fx
+ ::set-figure-color
+ (fn [{:keys [db]} [_ color]]
+   (let [uid (get-in db [:connection :user-id])
+         loc (get-in db [:users uid :location])]
+     (if-not (uf/has-figure? {:location loc})
+       {:db db}
+       (let [loc' (assoc-in loc [:model :color] (uf/normalize-color color))
+             db' (assoc-in db [:users uid :location] loc')
+             layer (figure-layer-fx db')]
+         {:db (get layer :db db')
+          :fx (into [[:dispatch [:is.galt.globo.ui.connection.events/send-message
+                                 {:type :update-user
+                                  :content {:id uid :location loc'}}]]]
+                    (or (:fx layer) []))})))))
 
 (rf/reg-event-fx
  ::send-chat-message
@@ -192,12 +262,42 @@
  (fn [db _]
    (assoc-in db [:mouse-action] nil)))
 
+(defn- clear-hop-timers! []
+  (doseq [t @ui.map/hop-timers]
+    (js/clearTimeout t))
+  (reset! ui.map/hop-timers []))
+
+(defn- play-hop-legs! [g legs]
+  (let [[first-leg & rest-legs] legs]
+    (j/call g :pointOfView
+            (clj->js (dissoc first-leg :duration))
+            (:duration first-leg))
+    (reduce (fn [acc-ms leg]
+              (let [t (js/setTimeout
+                       (fn []
+                         (j/call g :pointOfView
+                                 (clj->js (dissoc leg :duration))
+                                 (:duration leg)))
+                       acc-ms)]
+                (swap! ui.map/hop-timers conj t)
+                (+ acc-ms (:duration leg))))
+            (:duration first-leg)
+            rest-legs)))
+
 (rf/reg-fx
  ::focus-globe
- (fn [coords]
+ (fn [{:keys [duration] :as coords}]
    (when-let [g @ui.map/globe-instance]
-     (j/call g :pointOfView
-             (clj->js (merge {:altitude 1.5} coords))))))
+     (clear-hop-timers!)
+     (let [dest (merge {:altitude 1.5} (dissoc coords :duration))
+           from (when duration
+                  (-> (j/call g :pointOfView)
+                      (js->clj :keywordize-keys true)
+                      (select-keys [:lat :lng :altitude])))
+           legs (when from (camera/hop-legs from dest))]
+       (if legs
+         (play-hop-legs! g legs)
+         (j/call g :pointOfView (clj->js dest) duration))))))
 
 (rf/reg-event-fx
  ::go-to-favorite
@@ -218,7 +318,9 @@
 (rf/reg-event-fx
  ::focus-user
  (fn [_ [_ coords]]
-   {:fx [[::focus-globe (select-keys coords [:lat :lng])]]}))
+   {:fx [[::focus-globe (merge (select-keys coords [:lat :lng])
+                               {:altitude uf/focus-altitude
+                                :duration uf/focus-ms})]]}))
 
 (rf/reg-fx
  ::ring-timer

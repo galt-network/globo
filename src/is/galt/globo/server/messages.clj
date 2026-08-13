@@ -8,7 +8,8 @@
    [clojure.string :as str]
    [is.galt.globo.protocols :as protocols]
    [is.galt.globo.server.publish :as publish]
-   [is.galt.globo.server.validation :as validation]))
+   [is.galt.globo.server.validation :as validation]
+   [is.galt.globo.user-figure :as uf]))
 
 (def default-favorites
   "Favorites seeded for newly registered users."
@@ -24,22 +25,36 @@
   [globo user-id]
   (publish/resolve-target-ids {:globo globo :user-id user-id} :all-but-sender))
 
+(defn- keywordize-location [loc]
+  (if (get-in loc [:model :color])
+    (update-in loc [:model :color] uf/normalize-color)
+    loc))
+
 (defn update-user
   "Merge :name/:location from the message into the user and broadcast the
   updated user to everybody (echo to sender; clients apply it idempotently).
   When :name is present and rejected by the Globo's validate-user-update
   fn, nothing is stored or broadcast and the caller gets
   {:status :rejected :error string :details map} instead of the publish
-  boolean."
+  boolean. A location too close to another user is rejected the same way."
   [{:keys [globo user-id]} {:keys [content]}]
   (let [storage (user-storage globo)]
-    (if-let [rejection ((:validate-user-update globo) globo user-id content)]
-      {:status :rejected :error (:error rejection) :details (:details rejection)}
-      (do
-        (protocols/update-user! storage user-id #(merge % (select-keys content [:name :location])))
-        (publish/publish! globo :everybody
-                          {:type :update-user :user-id user-id
-                           :content (protocols/get-user storage user-id)})))))
+    (cond
+      (and (:location content)
+           (uf/too-close? (protocols/users-map storage) user-id (:location content)))
+      {:status :rejected :error "Too close to an existing user"}
+
+      :else
+      (if-let [rejection ((:validate-user-update globo) globo user-id content)]
+        {:status :rejected :error (:error rejection) :details (:details rejection)}
+        (do
+          (protocols/update-user! storage user-id
+                                  #(merge % (cond-> (select-keys content [:name :location])
+                                              (:location content)
+                                              (update :location keywordize-location))))
+          (publish/publish! globo :everybody
+                            {:type :update-user :user-id user-id
+                             :content (protocols/get-user storage user-id)}))))))
 
 (defn update-favorite
   "Merge :partial into the user's favorite at :index and broadcast it to
