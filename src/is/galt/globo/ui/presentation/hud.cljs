@@ -56,13 +56,13 @@
              (:name u)]]]
           [:div {:class "level-right"}
            [:button.button
-            {:class "is-small is-info is-rounded is-outlined"
+            {:class "is-small is-rounded"
              :disabled (nil? (:location u))
              :on-click (fn [_]
                          (when-let [loc (:location u)]
                            (rf/dispatch
                             [::ui.events/focus-user loc])))}
-            "Focus"]]]])]]))
+            [icon :goto-map-location "Show"]]]]])]]))
 
 (defn place-objects
   []

@@ -9,7 +9,8 @@
    :set-location [:fa-solid :fa-location-dot]
    ; :hexholds [:fa-solid :fa-hexagon]
    :hexholds [:fa-brands :fa-connectdevelop]
-   :user-communication [:fa-solid :fa-users-viewfinder]})
+   :user-communication [:fa-solid :fa-users-viewfinder]
+   :goto-map-location [:fa-solid :fa-magnifying-glass-arrow-right]})
 
 (defn icon
   [icon-type & [text]]
