@@ -130,7 +130,9 @@
    (-> db
        (assoc-in ,,, [:connection :connection-id] (:connection-id message))
        (assoc-in ,,, [:connection :user-id] (:user-id message))
-       (assoc-in ,,, [:connection :status] :online))))
+       (assoc-in ,,, [:connection :status] :online)
+       (assoc-in ,,, [:config :max-user-name-length]
+                 (or (get-in message [:content :max-user-name-length]) 42)))))
 
 (rf/reg-event-db
  ::disconnected

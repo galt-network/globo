@@ -92,7 +92,7 @@
         entry (some #(when (= hex-id (:id %)) %) visible)
         user-id (get-in db [:connection :user-id])]
     (when (and (some? hex-id)
-               (get-in db [:hexholds :active?])
+               (= :hexholds (get-in db [:ui :active-view]))
                (within-lod? altitude)
                (some? entry)
                (can-paint? entry user-id))

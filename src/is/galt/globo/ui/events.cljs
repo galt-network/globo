@@ -6,8 +6,10 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [is.galt.globo.ui.hexholds :as hexholds]
+   [is.galt.globo.ui.hud-views :as hud-views]
    [is.galt.globo.ui.message-arcs :as message-arcs]
    [is.galt.globo.ui.presentation.map :as ui.map]
+   [is.galt.globo.ui.user-name :as user-name]
    [re-frame.core :as rf]))
 
 (defonce mobile-media-query-list
@@ -355,21 +357,52 @@
  (fn [db [_ active-panel]]
    (assoc-in db [:ui :active-panel] active-panel)))
 
+(rf/reg-event-fx
+ ::set-active-view
+ [(rf/inject-cofx ::globe-viewpoint)]
+ (fn [{:keys [db globe-viewpoint]} [_ view]]
+   (or (hud-views/apply-view db view globe-viewpoint)
+       {:db db})))
+
 (rf/reg-event-db
- ::set-settings-open
- (fn [db [_ open?]]
-   (assoc-in db [:ui :settings-open?] open?)))
+ ::set-user-name-draft
+ (fn [db [_ draft]]
+   (assoc-in db [:ui :user-name-draft] draft)))
 
 (rf/reg-event-fx
- ::set-user-name
- (fn [{:keys [db]} [_ name]]
-  (let [user-id (get-in db [:connection :user-id])]
-    (if user-id
-      {:db (assoc-in db [:users user-id :name] name)
-       :fx [[:dispatch [:is.galt.globo.ui.connection.events/send-message
-                        {:type :update-user
-                         :content {:id user-id :name name}}]]]}
-      {:db db}))))
+ ::save-user-name
+ (fn [{:keys [db]} _]
+    (let [user-id (get-in db [:connection :user-id])
+          max-length (get-in db [:config :max-user-name-length] 42)
+          name' (user-name/clamp-name max-length (get-in db [:ui :user-name-draft]))]
+     (if (and user-id
+              (not (user-name/name-unchanged?
+                    (get-in db [:users user-id :name]) name')))
+       {:db (assoc-in db [:ui :user-name-save-error] nil)
+        :fx [[:fetch {:method :post
+                      :url (get-in db [:config :send-message-url])
+                      :body {:type :update-user
+                             :connection-id (get-in db [:connection :connection-id])
+                             :user-id user-id
+                             :content {:id user-id :name name'}}
+                      :request-content-type :json
+                      :response-content-types {#"application/.*json" :json}
+                      :on-success [::user-name-save-success]
+                      :on-failure [::user-name-save-failed]}]]}
+       {:db (assoc-in db [:ui :user-name-save-error] nil)}))))
+
+(rf/reg-event-db
+ ::user-name-save-success
+ (fn [db _]
+   (assoc-in db [:ui :user-name-save-error] nil)))
+
+(rf/reg-event-db
+ ::user-name-save-failed
+ (fn [db [_ response]]
+   (assoc-in db [:ui :user-name-save-error]
+             (or (user-name/save-error-from-response response)
+                 {:error "Could not update your name. Please try again."
+                  :details nil}))))
 
 ;; Hexholds: H3 hexagon grid paint layer.
 (rf/reg-fx
@@ -393,71 +426,37 @@
    {:fx [[::sync-hexholds (select-keys (:hexholds db) [:visible :colors])]]}))
 
 (rf/reg-event-fx
- ::toggle-hexholds
- [(rf/inject-cofx ::globe-viewpoint)]
- (fn [{:keys [db globe-viewpoint]} _]
-   (let [active? (get-in db [:hexholds :active?])
-         db' (-> db
-                 (assoc-in [:hexholds :active?] (not active?))
-                 (assoc-in [:hexholds :panel-open?] (not active?)))]
-     (if active?
-       ;; turning OFF: close panel, clear grid + hover + selection,
-       ;; restore the hovered cell's painted stroke/fill
-        (let [db'' (-> db'
-                       (assoc-in [:hexholds :visible] [])
-                       (assoc-in [:hexholds :hover-id] nil)
-                       (assoc-in [:hexholds :selected-id] nil)
-                       (assoc-in [:ui :active-panel] :users))]
-         {:db db''
-          :fx [[::sync-hexholds {:visible [] :colors (get-in db [:hexholds :colors])}]
-               [::update-hexhold-hover-tint
-                {:from-id (get-in db [:hexholds :hover-id])
-                 :to-id nil
-                 :colors (get-in db [:hexholds :colors])}]]})
-       ;; turning ON: open panel (+ close settings), refresh viewport
-        (if (hexholds/within-lod? (:altitude globe-viewpoint))
-          {:db (assoc-in db' [:ui :active-panel] :hexholds)
-           :fx [[:dispatch [::set-settings-open false]]
-                [:dispatch [::refresh-hexholds-viewport]]
-                [:dispatch [::update-hexholds-info]]]}
-         {:db (assoc-in db' [:ui :active-panel] :hexholds)
-          :fx [[:dispatch [::set-settings-open false]]
-               [:dispatch [:is.galt.globo.ui.connection.events/system-notification
-                           {:content {:message "Zoom in to see hexholds"
-                                      :severity :info}}]]]})))))
-
-(rf/reg-event-fx
  ::refresh-hexholds-viewport
  [(rf/inject-cofx ::globe-viewpoint)]
  (fn [{:keys [db globe-viewpoint]} _]
-   (if (and (get-in db [:hexholds :active?])
+   (if (and (hud-views/hexholds-view? db)
             (hexholds/within-lod? (:altitude globe-viewpoint)))
-      (let [cells (hexholds/viewport-cells globe-viewpoint)
-            db' (assoc-in db [:hexholds :visible] [])]
-         (if (seq cells)
-          {:db db'
-           :fx [[:fetch {:method :post
-                         :url (get-in db [:config :hexholds-query-url])
-                         :body {:cells cells}
-                         :request-content-type :json
-                         :response-content-types {#"application/.*json" :json}
-                         :on-success [::hexholds-query-success]
-                         :on-failure [::hexholds-query-failure]}]
-                [:dispatch [::update-hexholds-info]]]}
-          {:db db'
-           :fx [[::sync-hexholds {:visible [] :colors (get-in db [:hexholds :colors])}]
-                [:dispatch [::update-hexholds-info]]]}))
+     (let [cells (hexholds/viewport-cells globe-viewpoint)
+           db' (assoc-in db [:hexholds :visible] [])]
+       (if (seq cells)
+         {:db db'
+          :fx [[:fetch {:method :post
+                        :url (get-in db [:config :hexholds-query-url])
+                        :body {:cells cells}
+                        :request-content-type :json
+                        :response-content-types {#"application/.*json" :json}
+                        :on-success [::hexholds-query-success]
+                        :on-failure [::hexholds-query-failure]}]
+               [:dispatch [::update-hexholds-info]]]}
+         {:db db'
+          :fx [[::sync-hexholds {:visible [] :colors (get-in db [:hexholds :colors])}]
+               [:dispatch [::update-hexholds-info]]]}))
       ;; out of gate: clear grid + hover, restore the hovered cell's
       ;; painted stroke/fill
-      {:db (-> db
-               (assoc-in [:hexholds :visible] [])
-               (assoc-in [:hexholds :hover-id] nil))
-       :fx [[::sync-hexholds {:visible [] :colors (get-in db [:hexholds :colors])}]
-            [::update-hexhold-hover-tint
-             {:from-id (get-in db [:hexholds :hover-id])
-              :to-id nil
-              :colors (get-in db [:hexholds :colors])}]
-            [:dispatch [::update-hexholds-info]]]})))
+     {:db (-> db
+              (assoc-in [:hexholds :visible] [])
+              (assoc-in [:hexholds :hover-id] nil))
+      :fx [[::sync-hexholds {:visible [] :colors (get-in db [:hexholds :colors])}]
+           [::update-hexhold-hover-tint
+            {:from-id (get-in db [:hexholds :hover-id])
+             :to-id nil
+             :colors (get-in db [:hexholds :colors])}]
+           [:dispatch [::update-hexholds-info]]]})))
 
 (rf/reg-event-fx
  ::hexholds-query-success
@@ -470,10 +469,10 @@
                           :color (or (get colors id)
                                      (when color (keyword color)))})
                        hexholds)]
-    {:db (assoc-in db [:hexholds :visible] visible)
-     :fx [[::sync-hexholds {:visible visible
-                            :colors (get-in db [:hexholds :colors])}]
-          [:dispatch [::update-hexholds-info]]]})))
+     {:db (assoc-in db [:hexholds :visible] visible)
+      :fx [[::sync-hexholds {:visible visible
+                             :colors (get-in db [:hexholds :colors])}]
+           [:dispatch [::update-hexholds-info]]]})))
 
 (rf/reg-event-fx
  ::hexholds-query-failure
@@ -490,8 +489,8 @@
                            (assoc h :color c)
                            h))
                        (get-in db [:hexholds :visible]))]
-    {:db (assoc-in db [:hexholds :colors] colors')
-     :fx [[::sync-hexholds {:visible visible :colors colors'}]]})))
+     {:db (assoc-in db [:hexholds :colors] colors')
+      :fx [[::sync-hexholds {:visible visible :colors colors'}]]})))
 
 (rf/reg-event-fx
  ::hexhold-updated
@@ -501,8 +500,8 @@
                (assoc-in db [:hexholds :colors id] color)
                (update-in db [:hexholds :colors] dissoc id))
          visible (mapv (fn [h] (if (= id (:id h))
-                                (assoc h :owner-id owner-id)
-                                h))
+                                 (assoc h :owner-id owner-id)
+                                 h))
                        (hexholds/update-visible-entry
                         (get-in db [:hexholds :visible]) id color))
          db'' (assoc-in db' [:hexholds :visible] visible)]
@@ -513,15 +512,14 @@
 (rf/reg-event-fx
  ::set-hexhold-hover
  (fn [{:keys [db]} [_ hex-id]]
-   (let [active? (get-in db [:hexholds :active?])
-         current (get-in db [:hexholds :hover-id])]
-      (when (and active? (not= hex-id current))
-        {:db (assoc-in db [:hexholds :hover-id] hex-id)
-         :fx [[::update-hexhold-hover-tint
-               {:from-id current
-                :to-id hex-id
-                :colors (get-in db [:hexholds :colors])
-                :selected-id (get-in db [:hexholds :selected-id])}]]}))))
+   (let [current (get-in db [:hexholds :hover-id])]
+     (when (and (hud-views/hexholds-view? db) (not= hex-id current))
+       {:db (assoc-in db [:hexholds :hover-id] hex-id)
+        :fx [[::update-hexhold-hover-tint
+              {:from-id current
+               :to-id hex-id
+               :colors (get-in db [:hexholds :colors])
+               :selected-id (get-in db [:hexholds :selected-id])}]]}))))
 
 (rf/reg-event-fx
  ::paint-hexhold-at
@@ -530,9 +528,9 @@
          user-id (get-in db [:connection :user-id])
          visible-ids (into #{} (map :id) (get-in db [:hexholds :visible]))]
      (when (and hex-id (contains? visible-ids hex-id))
-        (let [color (if (contains? point :color)
-                      (:color point)
-                      (hexholds/next-color (get-in db [:hexholds :colors hex-id])))]
+       (let [color (if (contains? point :color)
+                     (:color point)
+                     (hexholds/next-color (get-in db [:hexholds :colors hex-id])))]
          {:fx [[:dispatch [::hexhold-updated {:id hex-id :color color :owner-id user-id}]]
                [:dispatch [:is.galt.globo.ui.connection.events/send-message
                            {:type :paint-hexhold

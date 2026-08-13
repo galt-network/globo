@@ -58,6 +58,9 @@
   (testing "valid events pass"
     (is (nil? (validation/outbound-errors
                {:type :connected :content {:connection-id "c1" :user-id "u1"}})))
+    (is (nil? (validation/outbound-errors
+               {:type :connected
+                :content {:connection-id "c1" :user-id "u1" :max-user-name-length 42}})))
     (is (nil? (validation/outbound-errors {:type :map-objects :content {:objects #{}}})))
     (is (nil? (validation/outbound-errors {:type :users-online :content {:users [valid-user]}})))
     (is (nil? (validation/outbound-errors {:type :messages :content {:messages [valid-message]}})))

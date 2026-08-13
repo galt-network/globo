@@ -26,13 +26,20 @@
 
 (defn update-user
   "Merge :name/:location from the message into the user and broadcast the
-  updated user to everybody (echo to sender; clients apply it idempotently)."
+  updated user to everybody (echo to sender; clients apply it idempotently).
+  When :name is present and rejected by the Globo's validate-user-update
+  fn, nothing is stored or broadcast and the caller gets
+  {:status :rejected :error string :details map} instead of the publish
+  boolean."
   [{:keys [globo user-id]} {:keys [content]}]
   (let [storage (user-storage globo)]
-    (protocols/update-user! storage user-id #(merge % (select-keys content [:name :location])))
-    (publish/publish! globo :everybody
-                      {:type :update-user :user-id user-id
-                       :content (protocols/get-user storage user-id)})))
+    (if-let [rejection ((:validate-user-update globo) globo user-id content)]
+      {:status :rejected :error (:error rejection) :details (:details rejection)}
+      (do
+        (protocols/update-user! storage user-id #(merge % (select-keys content [:name :location])))
+        (publish/publish! globo :everybody
+                          {:type :update-user :user-id user-id
+                           :content (protocols/get-user storage user-id)})))))
 
 (defn update-favorite
   "Merge :partial into the user's favorite at :index and broadcast it to

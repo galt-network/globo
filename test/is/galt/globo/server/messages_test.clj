@@ -112,6 +112,53 @@
         (is (= "update-user" (:type event)))
         (is (= "u1" (:user-id event)))
         (is (= "Renamed" (get-in event [:content :name]))))))
+  (testing "update-user name longer than the server limit is rejected without broadcast"
+    (let [g (make-globo) sent (atom [])
+          long-name (apply str (repeat 43 "x"))
+          result (with-recording-send! sent
+                   #(messages/process {:globo g :user-id "u1"}
+                                      {:type :update-user :content {:id "u1" :name long-name}}))]
+      (is (= :rejected (:status result)))
+      (is (= 42 (get-in result [:details :max])))
+      (is (= 43 (get-in result [:details :actual])))
+      (is (= "Me" (:name (protocols/get-user (:storage g) "u1"))))
+      (is (empty? @sent))))
+  (testing "update-user name at the limit is accepted and broadcast"
+    (let [g (make-globo) sent (atom [])
+          max-name (apply str (repeat 42 "x"))]
+      (with-recording-send! sent
+        #(is (true? (messages/process {:globo g :user-id "u1"}
+                                      {:type :update-user :content {:id "u1" :name max-name}}))))
+      (is (= max-name (:name (protocols/get-user (:storage g) "u1"))))
+      (is (= #{:channel-1 :channel-2} (set (map first @sent))))))
+  (testing "update-user host validate-user-update fn can reject with message and details"
+    (let [g (globo/create-globo {:validate-user-update (fn [_ _ {:keys [name]}]
+                                                         (when (= name "Taken")
+                                                           {:error "Name is already taken"
+                                                            :details {:uniqueness true}}))})
+          sent (atom [])]
+      (handlers/register-user! g "u1")
+      (protocols/add-user-connection! (:storage g) "u1" "conn-1")
+      (protocols/add-connection! (:connections g) "conn-1" :channel-1)
+      (let [result (with-recording-send! sent
+                     #(messages/process {:globo g :user-id "u1"}
+                                        {:type :update-user :content {:id "u1" :name "Taken"}}))]
+        (is (= :rejected (:status result)))
+        (is (= "Name is already taken" (:error result)))
+        (is (= {:uniqueness true} (:details result)))
+        (is (empty? @sent)))))
+  (testing "update-user location-only update skips name validation"
+    (let [g (globo/create-globo {:validate-user-update (fn [_ _ _]
+                                                         {:error "never called" :details {}})})
+          sent (atom [])]
+      (handlers/register-user! g "u1")
+      (protocols/add-user-connection! (:storage g) "u1" "conn-1")
+      (protocols/add-connection! (:connections g) "conn-1" :channel-1)
+      (with-recording-send! sent
+        #(is (true? (messages/process {:globo g :user-id "u1"}
+                                      {:type :update-user :content {:id "u1" :location {:lat 1 :lng 2}}}))))
+      (is (= 1 (count @sent)))
+      (is (= {:lat 1 :lng 2} (:location (protocols/get-user (:storage g) "u1"))))))
   (testing "update-favorite notifies own connections"
     (let [g (make-globo) sent (atom [])]
       (protocols/update-user! (:storage g) "u1"
@@ -215,3 +262,22 @@
     (is (= 20 (count (protocols/latest-messages s 20))))
     (is (= [22 23 24] (map :id (protocols/latest-messages s 3))))
     (is (= [] (protocols/latest-messages (storage/in-memory-globo-storage) 20)))))
+
+(deftest send-message-bang-rejection-test
+  (testing "send-message! reports a rejected name change with error and details"
+    (let [g (globo/create-globo {:validate-user-update (fn [_ _ _]
+                                                         {:error "taken" :details {:uniqueness true}})})
+          long-name (apply str (repeat 43 "x"))]
+      (handlers/register-user! g "u1")
+      (protocols/add-user-connection! (:storage g) "u1" "conn-1")
+      (protocols/add-connection! (:connections g) "conn-1" :channel-1)
+      (with-recording-send! (atom [])
+        #(is (= [:error {:error "taken" :details {:uniqueness true}} [:user-name-rejected]]
+                (globo/send-message! g {:type :update-user :user-id "u1"
+                                        :content {:id "u1" :name long-name}}))))))
+  (testing "send-message! reports :ok on an accepted rename"
+    (let [g (make-globo)]
+      (with-recording-send! (atom [])
+        #(is (= [:ok true]
+                (globo/send-message! g {:type :update-user :user-id "u1"
+                                        :content {:id "u1" :name "Renamed"}})))))))

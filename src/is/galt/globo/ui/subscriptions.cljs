@@ -30,6 +30,21 @@
    (get-in db [:config :assets-base-url])))
 
 (rf/reg-sub
+ ::max-user-name-length
+ (fn [db _]
+   (get-in db [:config :max-user-name-length] 42)))
+
+(rf/reg-sub
+ ::user-name-save-error
+ (fn [db _]
+   (get-in db [:ui :user-name-save-error])))
+
+(rf/reg-sub
+ ::user-name-draft
+ (fn [db _]
+   (get-in db [:ui :user-name-draft])))
+
+(rf/reg-sub
  ::map-classes
  :<- [::mouse-action]
  (fn [action _]
@@ -59,14 +74,14 @@
    (get-in db [:ui :active-panel] :users)))
 
 (rf/reg-sub
+ ::active-view
+ (fn [db _]
+   (get-in db [:ui :active-view] :user-communication)))
+
+(rf/reg-sub
  ::messages
  (fn [db _]
    (get-in db [:messages])))
-
-(rf/reg-sub
- ::settings-open?
- (fn [db _]
-   (get-in db [:ui :settings-open?])))
 
 (rf/reg-sub
  ::current-user
@@ -85,11 +100,6 @@
    (get-in db [:system-notifications])))
 
 (rf/reg-sub
- ::hexholds-active?
- (fn [db _]
-   (get-in db [:hexholds :active?])))
-
-(rf/reg-sub
  ::hexholds-visible
  (fn [db _]
    (get-in db [:hexholds :visible])))
@@ -103,11 +113,6 @@
  ::hexholds-colors
  (fn [db _]
    (get-in db [:hexholds :colors])))
-
-(rf/reg-sub
- ::hexholds-panel-open?
- (fn [db _]
-   (get-in db [:hexholds :panel-open?])))
 
 (rf/reg-sub
  ::hexholds-selected-id

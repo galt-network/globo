@@ -139,7 +139,8 @@
      [:type [:= :connected]]
      [:content [:map
                 [:connection-id string?]
-                [:user-id string?]]]]]
+                [:user-id string?]
+                [:max-user-name-length {:optional true} [:maybe int?]]]]]]
    [:map-objects
     [:map
      [:type [:= :map-objects]]

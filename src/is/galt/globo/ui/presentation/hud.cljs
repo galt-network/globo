@@ -1,5 +1,6 @@
 (ns is.galt.globo.ui.presentation.hud
-  "HUD overlay: users, places, messages panels plus the collapsed summary bar."
+  "HUD overlay: radio view buttons (user-communication / settings /
+   hexholds) plus the collapsed summary bar."
   (:require
    [clojure.string :as str]
    [is.galt.globo.ui.connection.subscriptions :as conn.subs]
@@ -7,6 +8,7 @@
    [is.galt.globo.ui.hexholds :as hexholds]
    [is.galt.globo.ui.icons :refer [icon]]
    [is.galt.globo.ui.subscriptions :as ui.subs]
+   [is.galt.globo.ui.user-name :as user-name]
    [re-frame.core :as rf]
    [reagent.core :as r]))
 
@@ -33,7 +35,7 @@
    header
    [:div.hud-vstack {:class ["px-3" "pb-3"]} body]])
 
-(defn users-view
+(defn user-communication-users
   []
   (let [users @(rf/subscribe [::conn.subs/users-online])]
     [hud-panel
@@ -193,9 +195,9 @@
           [favorite-row {:index (:index slot)
                          :favorite (:favorite slot)}]))]]))
 
-(defn messages-view
+(defn user-communication-messages
   "Form-3 component using r/with-let so it can be called as a plain
-   function (like users-view/places-view) while still holding local
+   function (like user-communication-users/places) while still holding local
    input state. The form-2 version returned the inner render fn when
    called directly, which left the desktop column empty."
   []
@@ -228,7 +230,7 @@
                             :on-click send-fn}
             "Send"]]]]))))
 
-(defn places-view
+(defn user-communication-places
   []
   [:div.hud-vstack.places-layout
    [place-objects]
@@ -246,49 +248,73 @@
              :offline "is-offline"
              "is-offline")}])
 
-(defn settings-button
-  "Gear toggle that shows/hides the settings panel. Sits next to the
-   status dot in the HUD top bar."
+(defn hud-view-buttons
+  "Radio buttons for the three HUD views (user-communication, settings,
+   hexholds): exactly one is active, clicking the active one is a no-op.
+   Sits next to the status dot in the HUD top bar (both layouts)."
   []
-  (let [settings-open? @(rf/subscribe [::ui.subs/settings-open?])]
-    [:button.button.is-small.is-light.is-inverted.ml-2.mb-2
-     {:class (when settings-open? "is-active")
-      :title "Settings"
-      :on-click #(rf/dispatch [::ui.events/set-settings-open (not settings-open?)])}
-     [icon :settings]]))
-
-(defn hexholds-button
-  "Toggle for the hexholds grid layer. Sits next to the settings button
-   in the HUD top bar (both layouts)."
-  []
-  (let [active? @(rf/subscribe [::ui.subs/hexholds-active?])]
-    [:button.button.is-small.is-light.is-inverted.ml-2.mb-2
-     {:class (when active? "is-active")
-      :title "Show/Hide hexholds"
-      :on-click #(rf/dispatch [::ui.events/toggle-hexholds])}
-     [icon :hexholds]]))
+  (let [active-view @(rf/subscribe [::ui.subs/active-view])]
+    [:div.is-flex
+     (for [[view icon-name title] [[:user-communication :user-communication "User communication"]
+                                   [:settings :settings "Settings"]
+                                   [:hexholds :hexholds "Hexholds"]]]
+       ^{:key view}
+       [:button.button.is-small.is-light.is-inverted.ml-2.mb-2
+        {:class (when (= view active-view) "is-active")
+         :title title
+         :aria-pressed (= view active-view)
+         :on-click #(rf/dispatch [::ui.events/set-active-view view])}
+        [icon icon-name]])]))
 
 (defn settings-panel
-  "Settings panel: name input and location picker. Fills the HUD body
-   area below the header. Reuses hud-panel/panel-row so styling matches
-   the other panels."
+  "Settings panel: name input with a Save button (Enter also saves) and
+   location picker. The name draft lives in app-db so it survives
+   component remounts (the HUD swaps layout trees on the mobile
+   breakpoint); it is sent to the server only on save, and server-side
+   rejections (e.g. length or host uniqueness checks) are shown inline
+   under the field. Fills the HUD body area below the header. Reuses
+   hud-panel/panel-row so styling matches the other panels."
   []
   (let [current-user @(rf/subscribe [::ui.subs/current-user])
         mouse-action @(rf/subscribe [::ui.subs/mouse-action])
-        user-name (:name current-user)
+        max-length @(rf/subscribe [::ui.subs/max-user-name-length])
+        name-error @(rf/subscribe [::ui.subs/user-name-save-error])
+        draft @(rf/subscribe [::ui.subs/user-name-draft])
+        name-value (or draft (:name current-user) "")
         user-location (:location current-user)
-        picking? (= :pick-user-location (:type mouse-action))]
+        picking? (= :pick-user-location (:type mouse-action))
+        save (fn []
+               (rf/dispatch [::ui.events/save-user-name]))
+        unchanged? (user-name/name-unchanged? (:name current-user) name-value)]
     [hud-panel
      {:class ["hud-settings-panel"]}
      [panel-row
       [:div.field
        [:label.label.has-text-light-80 "Your name"]
-       [:div.control
-        [:input.input.is-small
-         {:type "text"
-          :value (or user-name "")
-          :placeholder "Your name"
-          :on-change #(rf/dispatch [::ui.events/set-user-name (.. % -target -value)])}]]]]
+       [:div.field.has-addons
+        [:div.control.is-expanded
+         [:input.input.is-small
+          {:type "text"
+           :value name-value
+           :max-length max-length
+           :placeholder "Your name"
+           :on-change #(rf/dispatch [::ui.events/set-user-name-draft
+                                     (.. % -target -value)])
+           :on-key-down (fn [e]
+                          (case (.-key e)
+                            "Enter" (save)
+                            "Escape" (rf/dispatch [::ui.events/set-user-name-draft nil])
+                            nil))}]]
+        [:div.control
+         [:button.button.is-small.is-info
+          {:disabled unchanged?
+           :on-click save}
+          "Save"]]]
+       (when name-error
+         [:p.help.is-danger (:error name-error)])
+       (when (:details name-error)
+         [:p.help.is-size-7.has-text-grey-light
+          (pr-str (:details name-error))])]]
      [panel-row
       [:div.field
        [:label.label.has-text-light-80 "Your location"]
@@ -433,20 +459,17 @@
     [hud-desktop-column (hexholds-operations)]
     [hud-desktop-column (hexholds-info)]]])
 
-(defn panel-tabs
+(defn user-communication-tabs
   []
   (let [active-panel @(rf/subscribe [::ui.subs/active-panel])]
     [:div.tabs.is-toggle.is-toggle-rounded.is-flex-shrink-0.mb-0
      [:ul
-      (for [[key icon label toggle?] [[:users "👥" "Users" false]
-                                      [:places "📌" "Places" false]
-                                      [:messages "💬" "Messages" false]
-                                      [:hexholds "⬡" "Hexholds" true]]]
+      (for [[key icon label] [[:users "👥" "Users"]
+                              [:places "📌" "Places"]
+                              [:messages "💬" "Messages"]]]
         ^{:key key}
-        [:li {:class (when (and (not toggle?) (= active-panel key)) "is-active")}
-         [:a {:on-click #(if toggle?
-                           (rf/dispatch [::ui.events/toggle-hexholds])
-                           (rf/dispatch [::ui.events/set-active-panel key]))}
+        [:li {:class (when (= active-panel key) "is-active")}
+         [:a {:on-click #(rf/dispatch [::ui.events/set-active-panel key])}
           [:span.icon.is-small icon]
           [:span label]]])]]))
 
@@ -455,28 +478,25 @@
   (let [connection-status @(rf/subscribe [::conn.subs/status])]
     [:div.is-flex.is-align-items-center.pt-2.px-3.mb-2.is-flex-shrink-0
      [status-dot connection-status]
-     [settings-button]
-     [hexholds-button]
+     [hud-view-buttons]
      [:div.is-flex-grow-1]
-     [panel-tabs]
+     [user-communication-tabs]
      [:div.is-flex-grow-1.is-flex.is-justify-content-flex-end
       [:button.delete.is-medium
        {:on-click #(rf/dispatch [::ui.events/set-hud-open false])
         :aria-label "Close"}]]]))
 
-(defn mobile-hud-details
+(defn mobile-user-communication-details
   []
-  (let [settings-open? @(rf/subscribe [::ui.subs/settings-open?])
-        panel-open? @(rf/subscribe [::ui.subs/hexholds-panel-open?])
-        active-panel @(rf/subscribe [::ui.subs/active-panel])
-        body (cond
-               settings-open? [settings-panel]
-               panel-open? [hexholds-panel]
-               :else (case active-panel
-                       :users [users-view]
-                       :places [places-view]
-                       :messages [messages-view]
-                       [users-view]))]
+  (let [active-view @(rf/subscribe [::ui.subs/active-view])
+        body (case active-view
+               :settings [settings-panel]
+               :hexholds [hexholds-panel]
+               (case @(rf/subscribe [::ui.subs/active-panel])
+                 :users [user-communication-users]
+                 :places [user-communication-places]
+                 :messages [user-communication-messages]
+                 [user-communication-users]))]
     [hud-details-layout
      {:header [hud-details-title-bar]
       :body body}]))
@@ -486,8 +506,7 @@
   (let [connection-status @(rf/subscribe [::conn.subs/status])]
     [:div.is-flex.is-align-items-center.px-3.pt-2.is-flex-shrink-0
      [status-dot connection-status]
-     [settings-button]
-     [hexholds-button]
+     [hud-view-buttons]
      [:div.is-flex-grow-1]
      [:div.hud-grab-handle
       {:on-click #(rf/dispatch [::ui.events/set-hud-open false])
@@ -497,26 +516,25 @@
        {:on-click #(rf/dispatch [::ui.events/set-hud-open false])
         :aria-label "Close"}]]]))
 
-(defn desktop-hud-details
+(defn desktop-user-communication-details
   []
-  (let [settings-open? @(rf/subscribe [::ui.subs/settings-open?])
-        panel-open? @(rf/subscribe [::ui.subs/hexholds-panel-open?])
-        body (cond
-               settings-open? [settings-panel]
-               panel-open? [hexholds-panel]
-               :else [:div.columns.is-variable.is-2.hud-columns
-                      [hud-desktop-column (users-view)]
-                      [hud-desktop-column (places-view)]
-                      [hud-desktop-column (messages-view)]])]
+  (let [active-view @(rf/subscribe [::ui.subs/active-view])
+        body (case active-view
+               :settings [settings-panel]
+               :hexholds [hexholds-panel]
+               [:div.columns.is-variable.is-2.hud-columns
+                [hud-desktop-column (user-communication-users)]
+                [hud-desktop-column (user-communication-places)]
+                [hud-desktop-column (user-communication-messages)]])]
     [hud-details-layout
      {:header [hud-header]
       :body body}]))
 
-(defn hud-details
+(defn user-communication-details
   []
   (if @(rf/subscribe [::ui.subs/is-mobile?])
-    [mobile-hud-details]
-    [desktop-hud-details]))
+    [mobile-user-communication-details]
+    [desktop-user-communication-details]))
 
 (defn hud-summary
   []
@@ -576,6 +594,6 @@
         hud-height (if open? "33vh" "3.75rem")]
     [:div#hud {:style {:height hud-height}}
      (if open?
-       [hud-details]
+       [user-communication-details]
        [hud-summary])
      [system-notifications-view]]))

@@ -418,8 +418,8 @@
 (deftest click-paint-hexhold-test
   (let [cell-a (hexholds/latlng->cell 20 0)
         cell-b (east-neighbor cell-a)
-        db {:hexholds {:active? true
-                       :visible [{:id cell-a :color nil}]}}]
+        db {:ui {:active-view :hexholds}
+            :hexholds {:visible [{:id cell-a :color nil}]}}]
     (testing "explicit hex-id of a visible cell paints that cell"
       (is (= {:hex-id cell-a}
              (hexholds/click-paint-hexhold db {:hex-id cell-a} 0.3))))
@@ -429,7 +429,7 @@
       (is (nil? (hexholds/click-paint-hexhold db {:hex-id cell-b} 0.3))))
     (testing "inactive layer never paints"
       (is (nil? (hexholds/click-paint-hexhold
-                 (assoc-in db [:hexholds :active?] false)
+                 (assoc-in db [:ui :active-view] :settings)
                  {:hex-id cell-a} 0.3))))
     (testing "above the LOD gate never paints"
       (is (nil? (hexholds/click-paint-hexhold db {:hex-id cell-a} 1.5))))
@@ -442,27 +442,27 @@
   (let [cell-a (hexholds/latlng->cell 20 0)]
     (testing "a cell owned by another user is never painted"
       (is (nil? (hexholds/click-paint-hexhold
-                 {:hexholds {:active? true
-                             :visible [{:id cell-a :color :red :owner-id "u2"}]}
+                 {:ui {:active-view :hexholds}
+                  :hexholds {:visible [{:id cell-a :color :red :owner-id "u2"}]}
                   :connection {:user-id "u1"}}
                  {:hex-id cell-a} 0.3))))
     (testing "anonymous user cannot paint an owned cell"
       (is (nil? (hexholds/click-paint-hexhold
-                 {:hexholds {:active? true
-                             :visible [{:id cell-a :color :red :owner-id "u1"}]}}
+                 {:ui {:active-view :hexholds}
+                  :hexholds {:visible [{:id cell-a :color :red :owner-id "u1"}]}}
                  {:hex-id cell-a} 0.3))))
     (testing "the owner paints their own cell"
       (is (= {:hex-id cell-a}
              (hexholds/click-paint-hexhold
-              {:hexholds {:active? true
-                          :visible [{:id cell-a :color :red :owner-id "u1"}]}
+              {:ui {:active-view :hexholds}
+               :hexholds {:visible [{:id cell-a :color :red :owner-id "u1"}]}
                :connection {:user-id "u1"}}
               {:hex-id cell-a} 0.3))))
     (testing "an unowned cell is paintable by anyone (nil user-id included)"
       (is (= {:hex-id cell-a}
              (hexholds/click-paint-hexhold
-              {:hexholds {:active? true
-                          :visible [{:id cell-a :color nil :owner-id nil}]}}
+              {:ui {:active-view :hexholds}
+               :hexholds {:visible [{:id cell-a :color nil :owner-id nil}]}}
               {:hex-id cell-a} 0.3))))))
 
 (deftest height-km-test

@@ -16,13 +16,16 @@
 (def default-db
   "Initial app-db schema for the globo application."
   {:system-state {:is-mobile? false}
-   :config {}
+   :config {:max-user-name-length 42}
    :users {}
    :connection {:status :offline
                 :connection-id nil
                 :user-id nil
                 :users-online #{}}
-   :ui {:active-panel :users}
+   :ui {:active-panel :users
+        :active-view :user-communication
+        :user-name-save-error nil
+        :user-name-draft nil}
    :messages []
    :map-objects #{}
    :placeable-map-objects {}
@@ -30,9 +33,7 @@
    :favorites []
    :rings {}
    :message-arcs {}
-   :hexholds {:active? false
-              :panel-open? false
-              :colors {}
+   :hexholds {:colors {}
               :visible []
               :hover-id nil
               :selected-id nil

@@ -7,7 +7,9 @@
    :pick-location [:fa-solid :fa-location-crosshairs]
    :edit [:fa-solid :fa-pen-to-square]
    :set-location [:fa-solid :fa-location-dot]
-   :hexholds [:fa-solid :fa-hexagon]})
+   ; :hexholds [:fa-solid :fa-hexagon]
+   :hexholds [:fa-brands :fa-connectdevelop]
+   :user-communication [:fa-solid :fa-users-viewfinder]})
 
 (defn icon
   [icon-type & [text]]

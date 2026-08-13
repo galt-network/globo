@@ -16,7 +16,23 @@
    [is.galt.globo.server.validation :as validation]))
 
 (defrecord Globo
-  [mount-path storage connections placeables hexholds log-fn])
+  [mount-path storage connections placeables hexholds log-fn
+   validate-user-update max-user-name-length])
+
+(def default-max-user-name-length 42)
+
+(defn- build-validate-user-update
+  "Compose the host validation fn (if any) with the built-in max-length
+  check. The returned fn only validates when :name is present in the
+  patch and returns nil (accepted) or {:error string :details map}."
+  [host-fn max-length]
+  (fn [globo _user-id patch]
+    (when (contains? patch :name)
+      (or (when host-fn (host-fn globo _user-id patch))
+          (when (and (some? (:name patch))
+                     (> (count (:name patch)) max-length))
+            {:error (str "Name must be at most " max-length " characters.")
+             :details {:max max-length :actual (count (:name patch))}})))))
 
 (defn create-globo
   "Build a Globo component.
@@ -30,19 +46,30 @@
                      default the built-in static config
     :hexholds      - HexholdStore implementation, default in-memory with
                      an optional land index loaded from classpath
-    :log-fn        - logging fn (args are printed), default println"
+    :log-fn        - logging fn (args are printed), default println
+    :max-user-name-length - server-enforced username length limit,
+                     default 42; delivered to clients in the
+                     :connected burst so the UI can enforce it
+    :validate-user-update - host fn [globo user-id patch] returning nil
+                     (accepted) or {:error string :details map}; runs in
+                     addition to the max-length check whenever :name is
+                     present in an :update-user patch (e.g. uniqueness)"
   ([] (create-globo {}))
-  ([{:keys [mount-path storage connections placeables hexholds log-fn]}]
-   (->Globo (or mount-path "/map")
-            (or storage (storage/in-memory-globo-storage))
-            (or connections (connections/in-memory-connection-store))
-            (cond
-              (nil? placeables) (placeables/static-placeable-objects)
-              (satisfies? protocols/PlaceableObjectProvider placeables) placeables
-              :else (placeables/static-placeable-objects placeables))
-            (or hexholds (hexholds/in-memory-hexhold-store
-                          (hexholds/load-land-index "hexholds/land-res5.txt")))
-            (or log-fn println))))
+  ([{:keys [mount-path storage connections placeables hexholds log-fn
+            validate-user-update max-user-name-length]}]
+   (let [max-length (or max-user-name-length default-max-user-name-length)]
+     (->Globo (or mount-path "/map")
+              (or storage (storage/in-memory-globo-storage))
+              (or connections (connections/in-memory-connection-store))
+              (cond
+                (nil? placeables) (placeables/static-placeable-objects)
+                (satisfies? protocols/PlaceableObjectProvider placeables) placeables
+                :else (placeables/static-placeable-objects placeables))
+              (or hexholds (hexholds/in-memory-hexhold-store
+                            (hexholds/load-land-index "hexholds/land-res5.txt")))
+              (or log-fn println)
+              (build-validate-user-update validate-user-update max-length)
+              max-length))))
 
 (defn normalize
   "Accepts either a Globo record or legacy deps
@@ -79,7 +106,10 @@
             (publish/publish! globo conns (validation/system-notification :error message)))
           [:error nil [:unknown-user]])
         (try
-          [:ok (messages/process {:globo globo :user-id user-id} message)]
+          (let [result (messages/process {:globo globo :user-id user-id} message)]
+            (if (= :rejected (:status result))
+              [:error {:error (:error result) :details (:details result)} [:user-name-rejected]]
+              [:ok result]))
           (catch Exception e
             ((:log-fn globo) "[globo] send-message! failed:" {:message message :error e})
             [:error nil [:processing-failed]]))))))

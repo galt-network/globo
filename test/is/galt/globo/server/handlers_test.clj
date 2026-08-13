@@ -34,7 +34,8 @@
         events (handlers/initial-burst-events g "c-new" "u1")]
     (is (= [:connected :map-objects :users-online :messages :placeable-map-objects :hexholds]
            (mapv :type events)))
-    (is (= {:connection-id "c-new" :user-id "u1"} (:content (first events))))
+    (is (= {:connection-id "c-new" :user-id "u1" :max-user-name-length 42}
+           (:content (first events))))
     (is (= {:objects #{}} (:content (second events))))
     (is (= {:users []} (:content (nth events 2))))
     (is (= {:messages []} (:content (nth events 3))))
@@ -107,6 +108,41 @@
           (is (= 200 (:status resp)))
           (is (= 1 (count favorites)))
           (is (= "" (:label (first favorites)))))))))
+
+(deftest send-message-handler-update-user-rejection-test
+  (testing "over-limit name returns 409 with error and details, storage untouched"
+    (let [g (make-globo)
+          long-name (apply str (repeat 43 "x"))]
+      (handlers/register-user! g "u1")
+      (protocols/update-user! (:storage g) "u1" #(assoc % :name "Me"))
+      (protocols/add-user-connection! (:storage g) "u1" "conn-1")
+      (protocols/add-connection! (:connections g) "conn-1" :channel-1)
+      (with-redefs [org.httpkit.server/send! (fn [ch data & _] true)]
+        (let [body (json/generate-string {:type "update-user" :connection-id "conn-1"
+                                          :content {:id "u1" :name long-name}})
+              resp (handlers/send-message-handler g
+                                                  {:user-id "u1"
+                                                   :body (io/input-stream (.getBytes body))})
+              parsed (-> resp :body json/parse-string)]
+          (is (= 409 (:status resp)))
+          (is (= "error" (get parsed "status")))
+          (is (= 42 (get-in parsed ["details" "max"])))
+          (is (= 43 (get-in parsed ["details" "actual"])))
+          (is (= "Me" (:name (protocols/get-user (:storage g) "u1"))))))))
+  (testing "valid rename returns 200"
+    (let [g (make-globo)]
+      (handlers/register-user! g "u1")
+      (protocols/update-user! (:storage g) "u1" #(assoc % :name "Me"))
+      (protocols/add-user-connection! (:storage g) "u1" "conn-1")
+      (protocols/add-connection! (:connections g) "conn-1" :channel-1)
+      (with-redefs [org.httpkit.server/send! (fn [ch data & _] true)]
+        (let [body (json/generate-string {:type "update-user" :connection-id "conn-1"
+                                          :content {:id "u1" :name "Alice"}})
+              resp (handlers/send-message-handler g
+                                                  {:user-id "u1"
+                                                   :body (io/input-stream (.getBytes body))})]
+          (is (= 200 (:status resp)))
+          (is (= "Alice" (:name (protocols/get-user (:storage g) "u1")))))))))
 
 (deftest hexholds-query-handler-test
   (testing "valid request returns 200 with land cells joined with colors"

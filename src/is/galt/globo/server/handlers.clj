@@ -34,7 +34,9 @@
   "Initial state events sent to a freshly connected client."
   [globo connection-id user-id]
   (let [storage (:storage globo)]
-    [{:type :connected :content {:connection-id connection-id :user-id user-id}}
+    [{:type :connected :content {:connection-id connection-id
+                                 :user-id user-id
+                                 :max-user-name-length (:max-user-name-length globo)}}
      {:type :map-objects :content {:objects (protocols/get-map-objects storage)}}
      {:type :users-online :content {:users (vec (users-online globo))}}
      {:type :messages :content {:messages (protocols/latest-messages storage 20)}}
@@ -113,15 +115,22 @@
                     message)
           client-id (:connection-id message)
           user-id (:user-id req)]
-      (if-let [errors (validation/inbound-errors message)]
-        (json-response 400 {:status "error"
-                            :error (str "invalid message: " errors)
-                            :client-id client-id})
-        (if (messages/process {:globo globo :user-id user-id} message)
-          (json-response 200 {:status "sent" :connection-id client-id})
-          (json-response 404 {:status "error"
-                              :error "client not found or send failed"
-                              :client-id client-id}))))
+        (if-let [errors (validation/inbound-errors message)]
+          (json-response 400 {:status "error"
+                              :error (str "invalid message: " errors)
+                              :client-id client-id})
+          (let [result (messages/process {:globo globo :user-id user-id} message)]
+            (cond
+              (= :rejected (:status result))
+              (json-response 409 {:status "error"
+                                  :error (:error result)
+                                  :details (:details result)})
+              result
+              (json-response 200 {:status "sent" :connection-id client-id})
+              :else
+              (json-response 404 {:status "error"
+                                  :error "client not found or send failed"
+                                  :client-id client-id})))))
     (catch Exception e
       (json-response 400 {:status "error" :error (.getMessage e)}))))
 
