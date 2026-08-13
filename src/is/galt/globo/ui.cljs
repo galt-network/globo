@@ -16,7 +16,8 @@
 (def default-db
   "Initial app-db schema for the globo application."
   {:system-state {:is-mobile? false}
-   :config {:max-user-name-length 42}
+   :config {:max-user-name-length 42
+            :hexholds-marks-budget 500}
    :users {}
    :connection {:status :offline
                 :connection-id nil
@@ -60,7 +61,8 @@
                                 :send-message-url (str globo-api-base-url "/send-message")
                                  :hexholds-query-url (str globo-api-base-url "/hexholds/query")
                                  :hexholds-messages-url (str globo-api-base-url "/hexholds/messages")
-                                :max-favorite-places 3}))
+                                :max-favorite-places 3
+                                 :hexholds-marks-budget 500}))
       :fx [[:dispatch [:is.galt.globo.ui.connection.events/initialize]]]})))
 
 (defn ^:export init

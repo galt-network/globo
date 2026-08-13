@@ -128,10 +128,22 @@
       (j/call g :arcsData @arcs-data))))
 
 ;; Hexholds layer
+(defn- current-viewpoint
+  []
+  (when-let [g @globe-instance]
+    (assoc (-> (j/call g :pointOfView)
+               (js->clj :keywordize-keys true)
+               (select-keys [:lat :lng :altitude]))
+           :aspect (.-aspect (j/call g :camera)))))
+
+(defn- idle-stroke
+  [claiming?]
+  (if claiming? hexholds/default-stroke hexholds/mark-stroke))
+
 (defn- hexhold->js-feature
-  [{:keys [id color]}]
+  [{:keys [id color]} marks?]
   (-> (hexholds/polygon-feature id color)
-      (merge (hexholds/hexhold->props color))
+      (merge (hexholds/hexhold->props color marks?))
       clj->js))
 
 (defn- apply-hover-tint!
@@ -139,12 +151,14 @@
    paint or rebuild sync (both reset cap-color and stroke-color to the
    painted state). One full pass over the cache: hovered and selected
    cells get the teal stroke, everything else reverts to painted fill +
-   default stroke — so a selection change also un-highlights the
+   idle stroke — so a selection change also un-highlights the
    previously selected cell."
   []
   (let [app-db @rf.db/app-db
         hover-id (get-in app-db [:hexholds :hover-id])
-        selected-id (get-in app-db [:hexholds :selected-id])]
+        selected-id (get-in app-db [:hexholds :selected-id])
+        claiming? (hexholds/claiming? app-db (:altitude (current-viewpoint)))
+        stroke (idle-stroke claiming?)]
     (doseq [[id f] @hexhold-cache]
       (let [color (get-in app-db [:hexholds :colors id])]
         (cond
@@ -156,23 +170,25 @@
               (aset f "stroke-color" hexholds/highlight-stroke-color))
           :else
           (do (aset f "cap-color" (hexholds/fill-color color))
-              (aset f "stroke-color" hexholds/default-stroke)))))
+              (aset f "stroke-color" stroke)))))
     (when-let [g @globe-instance]
       (j/call g :polygonsData @hexholds-data))))
 
 (defn sync-hexholds-from-db!
   "Reconcile the globe polygonsData array with the app-db :hexholds
-   state. :visible owns the viewport id set; :colors (the authoritative
-   server mirror) owns the paint colors — feature colors are ALWAYS
-   derived from :colors, never from :visible entry colors, so a stale or
-   partially-updated :visible can never paint a cell back to unpainted.
+   state. Layer ids come from layer-features (grid while claiming within
+   LOD, else nearest painted marks). :colors owns paint colors — feature
+   colors are ALWAYS derived from :colors, never from entry colors.
    When the id set matches the cache, only the color fields are mutated
    on the SAME cached JS objects and the same array is re-passed to
-   polygonsData — three-globe matches meshes by its stamped __id, so
-   materials update without rebuilding geometry. When the id set differs
-   the whole array is rebuilt and the ring cache invalidated."
-  [visible colors]
-  (let [cache @hexhold-cache
+   polygonsData. When the id set differs the whole array is rebuilt."
+  [_visible colors]
+  (let [db @rf.db/app-db
+        viewpoint (current-viewpoint)
+        visible (hexholds/layer-features db viewpoint)
+        colors (or colors (get-in db [:hexholds :colors] {}))
+        marks? (not (hexholds/claiming? db (:altitude viewpoint)))
+        cache @hexhold-cache
         ids (into #{} (map :id) visible)
         cached-ids (into #{} (keys cache))]
     (if (= ids cached-ids)
@@ -186,7 +202,7 @@
         (apply-hover-tint!))
       (let [features (->> visible
                           (mapv (fn [{:keys [id]}]
-                                  (hexhold->js-feature {:id id :color (get colors id)})))
+                                  (hexhold->js-feature {:id id :color (get colors id)} marks?)))
                           clj->js)]
         (reset! hexholds-data features)
         (swap! hexholds-version inc)
@@ -198,7 +214,7 @@
 
 (defn set-hexhold-hover-tint!
   "Hover transition for a hover change: the previously hovered cell
-   (from-id) reverts to its painted fill + white stroke, the newly hovered
+   (from-id) reverts to its painted fill + idle stroke, the newly hovered
    cell (to-id) gets the hover fill + teal border stroke. The teal stroke
    is the cell's OWN border (rendered by the polygons layer at 1+alt+1e-4,
    exactly over the caps) — so the outline is pixel-aligned with the cell
@@ -207,14 +223,16 @@
   [from-id to-id colors selected-id]
   (let [cache @hexhold-cache
         from-f (when from-id (get cache from-id))
-        to-f (when to-id (get cache to-id))]
+        to-f (when to-id (get cache to-id))
+        stroke (idle-stroke (hexholds/claiming? @rf.db/app-db
+                                                (:altitude (current-viewpoint))))]
     (when (or from-f to-f)
       (when from-f
         (aset from-f "cap-color" (hexholds/fill-color (get colors from-id)))
         (aset from-f "stroke-color"
               (if (= from-id selected-id)
                 hexholds/highlight-stroke-color
-                hexholds/default-stroke)))
+                stroke)))
       (when to-f
         (aset to-f "cap-color" (hexholds/hover-fill-color (get colors to-id)))
         (aset to-f "stroke-color" hexholds/highlight-stroke-color))
@@ -350,6 +368,12 @@
              (rf/dispatch [:is.galt.globo.ui.events/hexholds-sync-now]))
            120)))
 
+(defn reset-layer!
+  [layer-key]
+  (swap! layer-data assoc layer-key (new js/Array))
+  (when-let [g @globe-instance]
+    (j/call g (csk/->camelCase layer-key) (get @layer-data layer-key))))
+
 (defn add-to-layer
   [layer-key obj]
   (.push (get @layer-data layer-key) obj)
@@ -410,16 +434,13 @@
   "Preload every placeable GLB model into `model-cache` so placing
    objects does not hit the green-sphere fallback.
 
-   Placeables come from the server (initial SSE burst). When the
-   collection is empty (server provided nothing yet, or nothing at
-   all), open the models-ready gate directly so object placement is
-   never stuck waiting for preloads that will not happen."
+   Empty placeables are a no-op — the models-ready gate is opened by
+   `::all-models-ready` after loads finish, or by the server's
+   :placeable-map-objects event when it sends an empty list."
   [assets-base-url placeables]
-  (if (seq placeables)
-    (doseq [{:keys [model-id path]} placeables]
-      (let [url (str assets-base-url "/" path)]
-        (load-gltf! url model-id nil)))
-    (rf/dispatch [:is.galt.globo.ui.events/all-models-ready])))
+  (doseq [{:keys [model-id path]} placeables]
+    (let [url (str assets-base-url "/" path)]
+      (load-gltf! url model-id nil))))
 
 (defn create-3d-object
   [d]
@@ -564,6 +585,7 @@
     (swap! hexholds-version inc)
     (reset! hexhold-cache {})
     (reset! hexholds-data (new js/Array))
+    (swap! layer-data assoc :custom-layer-data (new js/Array))
     ;; 7. Null out the global handle
     (reset! globe-instance nil)))
 

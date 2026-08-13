@@ -71,6 +71,12 @@
   [altitude]
   (and (some? altitude) (<= altitude max-altitude)))
 
+(defn claiming?
+  "True when the interactive hexholds grid is showing."
+  [db altitude]
+  (and (= :hexholds (get-in db [:ui :active-view]))
+       (within-lod? altitude)))
+
 (defn can-paint?
   "Ownership gate: an entry (visible hexhold map with :owner-id) can be
    painted by user-id when it is unowned or owned by them. A missing
@@ -96,6 +102,17 @@
                (within-lod? altitude)
                (some? entry)
                (can-paint? entry user-id))
+      {:hex-id hex-id})))
+
+(defn click-painted-mark
+  "Open a claimed cell when the interactive grid is not showing.
+   Requires an explicit :hex-id that is in :colors. Nil while claiming
+   within LOD (that's paint) or for unclaimed / lat-lng-only points."
+  [db point altitude]
+  (let [hex-id (:hex-id point)]
+    (when (and hex-id
+               (get-in db [:hexholds :colors hex-id])
+               (not (claiming? db altitude)))
       {:hex-id hex-id})))
 
 (defn update-visible-entry
@@ -235,6 +252,36 @@
                              (or (:lng viewpoint) 0))
                (disk-k viewpoint)))
 
+(def default-marks-budget 500)
+
+(def marks-focus-altitude 0.3)
+(def mark-stroke "rgba(255, 255, 255, 0)")
+
+(defn painted-marks
+  "Claimed cells as layer entries, nearest to viewpoint first, capped at budget."
+  [colors viewpoint budget]
+  (let [budget (or budget default-marks-budget)
+        clat (or (:lat viewpoint) 0)
+        clng (or (:lng viewpoint) 0)]
+    (->> colors
+         (map (fn [[id color]]
+                (let [{:keys [lat lng]} (cell->latlng id)]
+                  {:id id
+                   :color color
+                   :dist (angular-distance-deg clat clng lat lng)})))
+         (sort-by :dist)
+         (take budget)
+         (mapv #(select-keys % [:id :color])))))
+
+(defn layer-features
+  "Interactive grid while claiming within LOD; otherwise painted marks."
+  [db viewpoint]
+  (if (claiming? db (:altitude viewpoint))
+    (get-in db [:hexholds :visible] [])
+    (painted-marks (get-in db [:hexholds :colors] {})
+                   viewpoint
+                   (get-in db [:config :hexholds-marks-budget]))))
+
 (defn screen->ndc
   [px py width height]
   {:x (- (* 2 (/ px width)) 1)
@@ -251,7 +298,7 @@
   (let [seg-len-sq (+ (* (- bx ax) (- bx ax)) (* (- by ay) (- by ay)))]
     (when (pos? seg-len-sq)
       (let [t (/ (+ (* (- px ax) (- bx ax)) (* (- py ay) (- by ay)))
-                  seg-len-sq)
+                 seg-len-sq)
             t (js/Math.max 0 (js/Math.min 1 t))
             proj-x (+ ax (* t (- bx ax)))
             proj-y (+ ay (* t (- by ay)))
@@ -292,10 +339,12 @@
 
 (defn hexhold->props
   "Globe polygonsData props for a cell (hover-independent)."
-  [color]
-  {:altitude polygon-altitude
-   :cap-color (fill-color color)
-   :stroke-color default-stroke})
+  ([color]
+   (hexhold->props color false))
+  ([color marks?]
+   {:altitude polygon-altitude
+    :cap-color (fill-color color)
+    :stroke-color (if marks? mark-stroke default-stroke)}))
 
 (defn polygon-feature
   "globe.gl polygonsData entry for a cell."

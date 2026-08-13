@@ -4,6 +4,7 @@
    [clojure.set :as set]
    [is.galt.globo.ui.connection :as ui.connection]
    [is.galt.globo.ui.message-arcs :as message-arcs]
+   [is.galt.globo.ui.models :as models]
    [re-frame.core :as rf]))
 
 (defn- log-success
@@ -79,9 +80,7 @@
  (fn [{:keys [db]} [_ {:keys [objects]}]]
    (let [by-model-id (reduce (fn [acc o] (assoc acc (:model-id o) o)) {} objects)]
      {:db (assoc db :placeable-map-objects by-model-id)
-      :fx [[:is.galt.globo.ui.events/preload-models
-            {:assets-base-url (get-in db [:config :assets-base-url])
-             :placeables objects}]]})))
+      :fx (models/placeables-fx (get-in db [:config :assets-base-url]) objects :server)})))
 
 (def system-notification-dismiss-ms 6000)
 (def max-system-notifications 5)
@@ -132,7 +131,7 @@
        (assoc-in ,,, [:connection :user-id] (:user-id message))
        (assoc-in ,,, [:connection :status] :online)
        (assoc-in ,,, [:config :max-user-name-length]
-                 (or (get-in message [:content :max-user-name-length]) 42)))))
+                     (or (get-in message [:content :max-user-name-length]) 42)))))
 
 (rf/reg-event-db
  ::disconnected

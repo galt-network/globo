@@ -3,14 +3,17 @@
    settings / hexholds)."
   (:require
    [cljs.test :refer-macros [deftest is testing]]
+   [is.galt.globo.ui.hexholds :as hexholds]
    [is.galt.globo.ui.hud-views :as views]))
+
+(def cell-a (hexholds/latlng->cell 20 0))
 
 (def base-db
   {:ui {:active-panel :users}
-   :hexholds {:colors {:h1 :red}
-              :visible [{:id "h1" :color :red}]
-              :hover-id "h1"
-              :selected-id "h1"
+   :hexholds {:colors {cell-a :red}
+              :visible [{:id cell-a :color :red}]
+              :hover-id cell-a
+              :selected-id cell-a
               :info nil
               :messages {}}})
 
@@ -63,7 +66,7 @@
       (is (= :settings (get-in result [:db :ui :active-view])))
       (is (= :users (get-in result [:db :ui :active-panel])))
       (is (not (contains? result :fx)))
-      (is (= {:id "h1" :color :red} (get-in result [:db :hexholds :visible 0])))))
+      (is (= {:id cell-a :color :red} (get-in result [:db :hexholds :visible 0])))))
   (testing "switching back to user-communication from settings is clean"
     (let [result (views/apply-view settings-db :user-communication {})]
       (is (= :user-communication (get-in result [:db :ui :active-view])))
@@ -74,7 +77,7 @@
     (let [result (views/apply-view base-db :hexholds {:altitude 0.1})]
       (is (= :hexholds (get-in result [:db :ui :active-view])))
       (is (= [refresh-fx info-fx] (event-ids result)))
-      (is (= [{:id "h1" :color :red}] (get-in result [:db :hexholds :visible])))))
+      (is (= [{:id cell-a :color :red}] (get-in result [:db :hexholds :visible])))))
   (testing "above LOD: activates the view and shows the zoom-in toast instead"
     (let [result (views/apply-view base-db :hexholds {:altitude 1.5})]
       (is (= :hexholds (get-in result [:db :ui :active-view])))
@@ -93,9 +96,10 @@
           (is (nil? (get-in result [:db :hexholds :selected-id])))
           (is (= :users (get-in result [:db :ui :active-panel])))
           (is (= [sync-fx hover-fx] (fx-ids result)))
-          (is (= {:visible [] :colors {:h1 :red}} (get-in result [:fx 0 1])))
-          (is (= {:from-id "h1" :to-id nil :colors {:h1 :red}}
+          (is (= {:visible [{:id cell-a :color :red}] :colors {cell-a :red}}
+                 (get-in result [:fx 0 1])))
+          (is (= {:from-id cell-a :to-id nil :colors {cell-a :red}}
                  (get-in result [:fx 1 1])))))))
   (testing "colors survive the switch for the sync fx"
-    (let [result (views/apply-view hexholds-db :settings {})]
-      (is (= {:h1 :red} (get-in result [:fx 0 1 :colors]))))))
+    (let [result (views/apply-view hexholds-db :settings {:lat 20 :lng 0})]
+      (is (= {cell-a :red} (get-in result [:fx 0 1 :colors]))))))

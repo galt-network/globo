@@ -19,18 +19,21 @@
 
 (defn leave-hexholds
   "Cleanup for turning the hexholds view off: clears the grid data and
-   resets the user-communication sub-tab, emitting grid-sync fx.
-   Operates on the PRE-switch db — the caller applies the new
-   active-view afterwards."
-  [db]
+   resets the user-communication sub-tab, syncing painted marks onto
+   the layer. Operates on the PRE-switch db — the caller applies the
+   new active-view afterwards."
+  [db viewpoint]
   (let [colors (get-in db [:hexholds :colors])
-        hover-id (get-in db [:hexholds :hover-id])]
+        hover-id (get-in db [:hexholds :hover-id])
+        marks (hexholds/painted-marks
+               colors viewpoint
+               (get-in db [:config :hexholds-marks-budget]))]
     {:db (-> db
              (assoc-in [:hexholds :visible] [])
              (assoc-in [:hexholds :hover-id] nil)
              (assoc-in [:hexholds :selected-id] nil)
              (assoc-in [:ui :active-panel] :users))
-     :fx [[:is.galt.globo.ui.events/sync-hexholds {:visible [] :colors colors}]
+     :fx [[:is.galt.globo.ui.events/sync-hexholds {:visible marks :colors colors}]
           [:is.galt.globo.ui.events/update-hexhold-hover-tint
            {:from-id hover-id :to-id nil :colors colors}]]}))
 
@@ -55,7 +58,7 @@
    the viewport (or shows the LOD toast)."
   [db view viewpoint]
   (when-not (= view (active-view db))
-    (let [cleanup (when (hexholds-view? db) (leave-hexholds db))
+    (let [cleanup (when (hexholds-view? db) (leave-hexholds db viewpoint))
           db' (-> (or (:db cleanup) db)
                   (assoc-in [:ui :active-view] view))]
       (if (= view :hexholds)

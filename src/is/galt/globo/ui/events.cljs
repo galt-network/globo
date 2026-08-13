@@ -7,9 +7,10 @@
    [clojure.string :as str]
    [is.galt.globo.ui.hexholds :as hexholds]
    [is.galt.globo.ui.hud-views :as hud-views]
-   [is.galt.globo.ui.message-arcs :as message-arcs]
-   [is.galt.globo.ui.presentation.map :as ui.map]
-   [is.galt.globo.ui.user-name :as user-name]
+    [is.galt.globo.ui.message-arcs :as message-arcs]
+    [is.galt.globo.ui.models :as models]
+    [is.galt.globo.ui.presentation.map :as ui.map]
+    [is.galt.globo.ui.user-name :as user-name]
    [re-frame.core :as rf]))
 
 (defonce mobile-media-query-list
@@ -48,9 +49,11 @@
 (rf/reg-fx
  ::update-map-objects
  (fn [{:keys [op objects]}]
-   (case (keyword op)
-     :add (doseq [p objects] (ui.map/add-to-layer :custom-layer-data (clj->js p)))
-     :remove (doseq [p objects] (ui.map/remove-from-layer :custom-layer-data (clj->js p))))))
+    (case (keyword op)
+      :add (doseq [p objects] (ui.map/add-to-layer :custom-layer-data (clj->js p)))
+      :remove (doseq [p objects] (ui.map/remove-from-layer :custom-layer-data (clj->js p)))
+      :replace (do (ui.map/reset-layer! :custom-layer-data)
+                   (doseq [p objects] (ui.map/add-to-layer :custom-layer-data (clj->js p)))))))
 
 (rf/reg-fx
  ::sync-rings
@@ -118,10 +121,19 @@
                            {:type :update-favorite
                             :content {:index index :partial partial}}]]]})
 
-       (let [paint (hexholds/click-paint-hexhold db point (:altitude globe-viewpoint))]
-         (if paint
-           {:fx [[:dispatch [::paint-hexhold-at paint]]]}
-           {:db db}))))))
+       (let [altitude (:altitude globe-viewpoint)
+             paint (hexholds/click-paint-hexhold db point altitude)
+             mark (when-not paint
+                    (hexholds/click-painted-mark db point altitude))]
+         (cond
+           paint {:fx [[:dispatch [::paint-hexhold-at paint]]]}
+           mark (let [hex-id (:hex-id mark)]
+                  {:db (assoc-in db [:ui :active-view] :hexholds)
+                   :fx [[:dispatch [::select-hexhold hex-id]]
+                        [::focus-globe (assoc (hexholds/cell->latlng hex-id)
+                                              :altitude hexholds/marks-focus-altitude)]
+                        [:dispatch [::refresh-hexholds-viewport]]]})
+           :else {:db db}))))))
 
 (rf/reg-event-fx
  ::place-objects
@@ -140,18 +152,13 @@
 (rf/reg-event-fx
  ::all-models-ready
  (fn [{:keys [db]} _]
-   ;; Flip the gate and replay every object that was buffered while
-   ;; models were still loading. ::place-objects now sees
-   ;; :models-ready? true and emits ::update-map-objects for them.
-   ;; The (into #{} ...) inside ::place-objects is idempotent for
-   ;; the buffered set (set-union with itself), so db :map-objects
-   ;; is unchanged but the globe.fx is fired for the real placement.
-   (let [buffered (seq (get-in db [:map-objects]))
-         db' (assoc db :models-ready? true)]
-     (if buffered
-       {:db db'
-        :fx [[:dispatch [::place-objects {:op :add :objects buffered}]]]}
-       {:db db'}))))
+    ;; Flip the gate and replace the custom layer with buffered
+    ;; map-objects so leftover fallback spheres are dropped.
+    (let [db' (assoc db :models-ready? true)]
+      (if-let [action (models/flush-layer-action (get db :map-objects))]
+        {:db db'
+         :fx [[::update-map-objects action]]}
+        {:db db'}))))
 
 (rf/reg-event-fx
  ::send-chat-message
@@ -190,7 +197,7 @@
  (fn [coords]
    (when-let [g @ui.map/globe-instance]
      (j/call g :pointOfView
-             (clj->js (merge coords {:altitude 1.5}))))))
+             (clj->js (merge {:altitude 1.5} coords))))))
 
 (rf/reg-event-fx
  ::go-to-favorite
@@ -372,9 +379,9 @@
 (rf/reg-event-fx
  ::save-user-name
  (fn [{:keys [db]} _]
-    (let [user-id (get-in db [:connection :user-id])
-          max-length (get-in db [:config :max-user-name-length] 42)
-          name' (user-name/clamp-name max-length (get-in db [:ui :user-name-draft]))]
+   (let [user-id (get-in db [:connection :user-id])
+         max-length (get-in db [:config :max-user-name-length] 42)
+         name' (user-name/clamp-name max-length (get-in db [:ui :user-name-draft]))]
      (if (and user-id
               (not (user-name/name-unchanged?
                     (get-in db [:users user-id :name]) name')))
@@ -422,8 +429,10 @@
 
 (rf/reg-event-fx
  ::hexholds-sync-now
- (fn [{:keys [db]} _]
-   {:fx [[::sync-hexholds (select-keys (:hexholds db) [:visible :colors])]]}))
+ [(rf/inject-cofx ::globe-viewpoint)]
+ (fn [{:keys [db globe-viewpoint]} _]
+   {:fx [[::sync-hexholds {:visible (hexholds/layer-features db globe-viewpoint)
+                           :colors (get-in db [:hexholds :colors])}]]}))
 
 (rf/reg-event-fx
  ::refresh-hexholds-viewport
@@ -444,19 +453,20 @@
                         :on-failure [::hexholds-query-failure]}]
                [:dispatch [::update-hexholds-info]]]}
          {:db db'
-          :fx [[::sync-hexholds {:visible [] :colors (get-in db [:hexholds :colors])}]
+          :fx [[::sync-hexholds {:visible (hexholds/layer-features db' globe-viewpoint)
+                                 :colors (get-in db [:hexholds :colors])}]
                [:dispatch [::update-hexholds-info]]]}))
-      ;; out of gate: clear grid + hover, restore the hovered cell's
-      ;; painted stroke/fill
-     {:db (-> db
-              (assoc-in [:hexholds :visible] [])
-              (assoc-in [:hexholds :hover-id] nil))
-      :fx [[::sync-hexholds {:visible [] :colors (get-in db [:hexholds :colors])}]
-           [::update-hexhold-hover-tint
-            {:from-id (get-in db [:hexholds :hover-id])
-             :to-id nil
-             :colors (get-in db [:hexholds :colors])}]
-           [:dispatch [::update-hexholds-info]]]})))
+     (let [db' (-> db
+                   (assoc-in [:hexholds :visible] [])
+                   (assoc-in [:hexholds :hover-id] nil))]
+       {:db db'
+        :fx [[::sync-hexholds {:visible (hexholds/layer-features db' globe-viewpoint)
+                               :colors (get-in db [:hexholds :colors])}]
+             [::update-hexhold-hover-tint
+              {:from-id (get-in db [:hexholds :hover-id])
+               :to-id nil
+               :colors (get-in db [:hexholds :colors])}]
+             [:dispatch [::update-hexholds-info]]]}))))
 
 (rf/reg-event-fx
  ::hexholds-query-success
@@ -476,21 +486,30 @@
 
 (rf/reg-event-fx
  ::hexholds-query-failure
- (fn [{:keys [db]} _]
-   {:db (assoc-in db [:hexholds :visible] [])
-    :fx [[:dispatch [::update-hexholds-info]]]}))
+ [(rf/inject-cofx ::globe-viewpoint)]
+ (fn [{:keys [db globe-viewpoint]} _]
+   (let [db' (assoc-in db [:hexholds :visible] [])]
+     {:db db'
+      :fx [[::sync-hexholds {:visible (hexholds/layer-features db' globe-viewpoint)
+                             :colors (get-in db [:hexholds :colors])}]
+           [:dispatch [::update-hexholds-info]]]})))
 
 (rf/reg-event-fx
  ::hexholds-colors
- (fn [{:keys [db]} [_ {:keys [colors]}]]
+ [(rf/inject-cofx ::globe-viewpoint)]
+ (fn [{:keys [db globe-viewpoint]} [_ {:keys [colors]}]]
    (let [colors' (into {} (map (fn [[k v]] [(name k) (keyword v)])) colors)
          visible (mapv (fn [{:keys [id] :as h}]
                          (if-let [c (get colors' id)]
                            (assoc h :color c)
                            h))
-                       (get-in db [:hexholds :visible]))]
-     {:db (assoc-in db [:hexholds :colors] colors')
-      :fx [[::sync-hexholds {:visible visible :colors colors'}]]})))
+                       (get-in db [:hexholds :visible]))
+         db' (-> db
+                 (assoc-in [:hexholds :colors] colors')
+                 (assoc-in [:hexholds :visible] visible))]
+     {:db db'
+      :fx [[::sync-hexholds {:visible (hexholds/layer-features db' globe-viewpoint)
+                             :colors colors'}]]})))
 
 (rf/reg-event-fx
  ::hexhold-updated

@@ -289,6 +289,9 @@
       (is (= hexholds/polygon-altitude (:altitude props)))
       (is (= hexholds/unpainted-fill (:cap-color props)))
       (is (= hexholds/default-stroke (:stroke-color props)))))
+  (testing "marks have no grid stroke"
+    (is (= hexholds/mark-stroke
+           (:stroke-color (hexholds/hexhold->props :red true)))))
   (testing "polygon-feature carries id, color and a closed ring"
     (let [cell (hexholds/latlng->cell 20 0)
           feature (hexholds/polygon-feature cell :blue)]
@@ -500,7 +503,7 @@
                  {:id "c" :color :blue :owner-id "u2"}]]
     (testing "whole globe in view"
       (let [info (hexholds/viewport-info {:lat 0 :lng 0 :altitude 2.5 :aspect 1}
-                                          visible)]
+                                         visible)]
         (is (= 2.5 (:altitude info)))
         (is (= 0 (:zoom-pct info)))
         (is (= 15927.5 (:height-km info)))
@@ -510,12 +513,12 @@
         (is (= 67 (:painted-pct info)))))
     (testing "zoomed in values"
       (let [info (hexholds/viewport-info {:lat 0 :lng 0 :altitude 0.5 :aspect 1}
-                                          visible)]
+                                         visible)]
         (is (= 80 (:zoom-pct info)))
         (is (= 3185.5 (:height-km info)))))
     (testing "empty viewport"
       (let [info (hexholds/viewport-info {:lat 0 :lng 0 :altitude 0.5 :aspect 1}
-                                          [])]
+                                         [])]
         (is (= 0 (:visible-count info)))
         (is (= 0 (:painted-count info)))
         (is (= 0 (:painted-pct info)))))
@@ -563,3 +566,79 @@
   (is (= "255,032,236" (hexholds/format-thousands 255032236)))
   (is (= "255" (hexholds/format-thousands 255)))
   (is (= "0" (hexholds/format-thousands 0))))
+
+(deftest painted-marks-empty-test
+  (testing "no claimed cells means nothing to draw"
+    (is (= [] (hexholds/painted-marks {} {:lat 20 :lng 0} 500)))))
+
+(deftest painted-marks-nearest-first-test
+  (let [near (hexholds/latlng->cell 20 0)
+        far (hexholds/latlng->cell -20 80)
+        colors {far :blue near :red}
+        marks (hexholds/painted-marks colors {:lat 20 :lng 0} 500)]
+    (testing "every claimed cell is a mark when under budget"
+      (is (= 2 (count marks)))
+      (is (= #{near far} (set (map :id marks)))))
+    (testing "nearest to the viewpoint comes first"
+      (is (= near (:id (first marks))))
+      (is (= :red (:color (first marks)))))))
+
+(deftest painted-marks-budget-test
+  (let [near (hexholds/latlng->cell 20 0)
+        mid (hexholds/latlng->cell 10 20)
+        far (hexholds/latlng->cell -20 80)
+        colors {far :blue mid :green near :red}
+        marks (hexholds/painted-marks colors {:lat 20 :lng 0} 2)]
+    (testing "over budget keeps only the nearest cells"
+      (is (= 2 (count marks)))
+      (is (= [near mid] (mapv :id marks)))
+      (is (not (some #(= far (:id %)) marks))))))
+
+(deftest layer-features-grid-when-claiming-test
+  (let [cell (hexholds/latlng->cell 20 0)
+        visible [{:id cell :color nil}]
+        db {:ui {:active-view :hexholds}
+            :hexholds {:visible visible :colors {cell :red}}}]
+    (is (= visible
+           (hexholds/layer-features db {:lat 20 :lng 0 :altitude 0.3})))))
+
+(deftest layer-features-marks-when-grid-off-test
+  (let [cell (hexholds/latlng->cell 20 0)
+        colors {cell :red}
+        db {:ui {:active-view :user-communication}
+            :config {:hexholds-marks-budget 500}
+            :hexholds {:visible [] :colors colors}}
+        viewpoint {:lat 20 :lng 0 :altitude 0.3}]
+    (testing "other views draw painted marks even within LOD"
+      (is (= [{:id cell :color :red}]
+             (hexholds/layer-features db viewpoint))))
+    (testing "hexholds view above LOD also draws marks, not the empty grid"
+      (is (= [{:id cell :color :red}]
+             (hexholds/layer-features
+              (assoc-in db [:ui :active-view] :hexholds)
+              (assoc viewpoint :altitude 1.5)))))))
+
+(deftest click-painted-mark-test
+  (let [cell (hexholds/latlng->cell 20 0)
+        other (hexholds/latlng->cell -20 80)
+        db {:ui {:active-view :user-communication}
+            :hexholds {:colors {cell :red} :visible []}}]
+    (testing "claimed cell opens when the grid is off"
+      (is (= {:hex-id cell}
+             (hexholds/click-painted-mark db {:hex-id cell} 0.3))))
+    (testing "unclaimed cell is ignored"
+      (is (nil? (hexholds/click-painted-mark db {:hex-id other} 0.3))))
+    (testing "lat/lng-only point is ignored"
+      (is (nil? (hexholds/click-painted-mark db {:lat 20 :lng 0} 0.3))))
+    (testing "claiming within LOD is paint, not open"
+      (is (nil? (hexholds/click-painted-mark
+                 {:ui {:active-view :hexholds}
+                  :hexholds {:colors {cell :red}
+                             :visible [{:id cell :color :red}]}}
+                 {:hex-id cell} 0.3))))
+    (testing "hexholds view above LOD still opens the mark"
+      (is (= {:hex-id cell}
+             (hexholds/click-painted-mark
+              {:ui {:active-view :hexholds}
+               :hexholds {:colors {cell :red} :visible []}}
+              {:hex-id cell} 1.5))))))
