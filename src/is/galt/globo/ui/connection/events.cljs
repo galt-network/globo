@@ -35,6 +35,7 @@
       :placeable-map-objects [::update-placeable-map-objects content]
       :hexholds [:is.galt.globo.ui.events/hexholds-colors content]
       :hexholds-updated [:is.galt.globo.ui.events/hexhold-updated content]
+      :hexhold-message [:is.galt.globo.ui.events/receive-hexhold-message content]
       :system-notification [::system-notification content]
       nil)))
 

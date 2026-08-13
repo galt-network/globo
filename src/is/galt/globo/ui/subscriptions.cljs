@@ -1,6 +1,7 @@
 (ns is.galt.globo.ui.subscriptions
   "Re-frame subscriptions for app UI state."
   (:require
+   [is.galt.globo.ui.hexholds :as hexholds]
    [re-frame.core :as rf]))
 
 (rf/reg-sub
@@ -102,3 +103,43 @@
  ::hexholds-colors
  (fn [db _]
    (get-in db [:hexholds :colors])))
+
+(rf/reg-sub
+ ::hexholds-panel-open?
+ (fn [db _]
+   (get-in db [:hexholds :panel-open?])))
+
+(rf/reg-sub
+ ::hexholds-selected-id
+ (fn [db _]
+   (get-in db [:hexholds :selected-id])))
+
+(rf/reg-sub
+ ::hexholds-info
+ (fn [db _]
+   (get-in db [:hexholds :info])))
+
+(rf/reg-sub
+ ::my-hexholds
+ (fn [db _]
+   (hexholds/my-hexholds (get-in db [:hexholds :visible])
+                         (get-in db [:connection :user-id]))))
+
+(rf/reg-sub
+ ::hexholds-messages
+ (fn [db _]
+   (get-in db [:hexholds :messages
+               (get-in db [:hexholds :selected-id])]
+           [])))
+
+(rf/reg-sub
+ ::hexholds-messages-map
+ (fn [db _]
+   (get-in db [:hexholds :messages] {})))
+
+(rf/reg-sub
+ ::hexholds-selected-entry
+ (fn [db _]
+   (let [selected-id (get-in db [:hexholds :selected-id])]
+     (first (filter #(= selected-id (:id %))
+                    (get-in db [:hexholds :visible]))))))

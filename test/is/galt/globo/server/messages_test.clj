@@ -165,7 +165,7 @@
         (is (= "red" (get-in event [:content :color]))))))
   (testing "paint-hexhold with nil color clears the cell"
     (let [g (make-globo) sent (atom [])]
-      (protocols/paint-hexhold! (:hexholds g) "abc" :blue)
+      (protocols/paint-hexhold! (:hexholds g) "abc" :blue "u1")
       (with-recording-send! sent
         #(messages/process {:globo g :user-id "u1"}
                            {:type :paint-hexhold :content {:hex-id "abc" :color nil}}))
@@ -174,6 +174,34 @@
         (is (= "hexholds-updated" (:type event)))
         (is (= "abc" (get-in event [:content :id])))
         (is (nil? (get-in event [:content :color]))))))
+  (testing "paint-hexhold by a non-owner is rejected with a warning to the sender only"
+    (let [g (make-globo) sent (atom [])]
+      (with-recording-send! sent
+        (fn []
+          (messages/process {:globo g :user-id "u1"}
+                            {:type :paint-hexhold :content {:hex-id "abc" :color :red}})
+          (reset! sent [])
+          (messages/process {:globo g :user-id "u2"}
+                            {:type :paint-hexhold :content {:hex-id "abc" :color :blue}})))
+      (is (= {"abc" :red} (protocols/hexhold-colors (:hexholds g))))
+      (is (= [:channel-2] (map first @sent)))
+      (let [event (recorded-event sent)]
+        (is (= "system-notification" (:type event)))
+        (is (= "warning" (get-in event [:content :severity]))))))
+  (testing "hexhold-message appends and broadcasts to everybody"
+    (let [g (make-globo) sent (atom [])]
+      (with-recording-send! sent
+        #(messages/process {:globo g :user-id "u1"}
+                           {:type :hexhold-message :content {:hex-id "abc" :text "hi there"}}))
+      (is (= 1 (count (protocols/hexhold-messages (:hexholds g) "abc"))))
+      (is (= #{:channel-1 :channel-2} (set (map first @sent))))
+      (let [event (recorded-event sent)]
+        (is (= "hexhold-message" (:type event)))
+        (is (= "abc" (get-in event [:content :hex-id])))
+        (is (= "u1" (get-in event [:content :message :author :id])))
+        (is (= "Me" (get-in event [:content :message :author :name])))
+        (is (= "hi there" (get-in event [:content :message :content])))
+        (is (string? (get-in event [:content :message :sent-at]))))))
   (testing "unknown :type throws"
     (let [g (make-globo)]
       (is (thrown? clojure.lang.ExceptionInfo

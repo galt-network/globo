@@ -79,9 +79,9 @@
     (is (nil? (validation/outbound-errors
                {:type :hexholds :content {:colors {}}})))
     (is (nil? (validation/outbound-errors
-               {:type :hexholds-updated :content {:id "abc" :color :red}})))
+               {:type :hexholds-updated :content {:id "abc" :color :red :owner-id "u1"}})))
     (is (nil? (validation/outbound-errors
-               {:type :hexholds-updated :content {:id "abc" :color nil}})))
+               {:type :hexholds-updated :content {:id "abc" :color nil :owner-id nil}})))
     (is (nil? (validation/outbound-errors
                (validation/system-notification :warning {:type :bogus :content {}})))))
   (testing "invalid events fail"

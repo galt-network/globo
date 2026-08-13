@@ -119,6 +119,12 @@
      [:content [:map
                 [:hex-id string?]
                 [:color [:maybe [:enum "red" "blue" "green" "yellow" "purple"]]]]]]]
+   [:hexhold-message
+    [:map
+     [:type [:= :hexhold-message]]
+     [:content [:map
+                [:hex-id string?]
+                [:text string?]]]]]
    [:system-notification
     [:map
      [:type [:= :system-notification]]
@@ -202,7 +208,20 @@
      [:type [:= :hexholds-updated]]
      [:content [:map
                 [:id string?]
-                [:color [:maybe [:enum :red :blue :green :yellow :purple]]]]]]]
+                [:color [:maybe [:enum :red :blue :green :yellow :purple]]]
+                [:owner-id [:maybe string?]]]]]]
+   [:hexhold-message
+    [:map
+     [:type [:= :hexhold-message]]
+     [:content [:map
+                [:hex-id string?]
+                [:message [:map
+                           [:id string?]
+                           [:author [:map
+                                     [:id string?]
+                                     [:name [:maybe string?]]]]
+                           [:content string?]
+                           [:sent-at string?]]]]]]]
    [:system-notification
     [:map
      [:type [:= :system-notification]]
@@ -230,10 +249,12 @@
 
 (defn system-notification
   "Build a :system-notification event reporting `event`, with a fixed
-  generic message for `severity`."
-  [severity event]
-  {:type :system-notification
-   :content {:message (severity-messages severity)
-             :severity severity
-             :sent-at (str (java.time.Instant/now))
-             :event event}})
+  generic message for `severity`, or `message` when provided."
+  ([severity event]
+   (system-notification severity event nil))
+  ([severity event message]
+   {:type :system-notification
+    :content {:message (or message (severity-messages severity))
+              :severity severity
+              :sent-at (str (java.time.Instant/now))
+              :event event}}))

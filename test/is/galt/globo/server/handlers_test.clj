@@ -112,12 +112,12 @@
   (testing "valid request returns 200 with land cells joined with colors"
     (let [g (globo/create-globo {:hexholds (is.galt.globo.server.hexholds/in-memory-hexhold-store
                                             #{"a" "b"})})
-          _ (protocols/paint-hexhold! (:hexholds g) "b" :red)
+          _ (protocols/paint-hexhold! (:hexholds g) "b" :red "u1")
           body (json/generate-string {:cells ["a" "b" "ocean"]})
           resp (handlers/hexholds-query-handler g
                                                 {:body (io/input-stream (.getBytes body))})]
       (is (= 200 (:status resp)))
-      (is (= [{"id" "a" "color" nil} {"id" "b" "color" "red"}]
+      (is (= [{"id" "a" "color" nil "owner-id" nil} {"id" "b" "color" "red" "owner-id" "u1"}]
              (->> (-> resp :body json/parse-string (get "hexholds"))
                   (sort-by #(get % "id")))))))
   (testing "malformed body returns 400"
@@ -130,4 +130,32 @@
           body (json/generate-string {:cells [1 2]})
           resp (handlers/hexholds-query-handler g
                                                 {:body (io/input-stream (.getBytes body))})]
+      (is (= 400 (:status resp))))))
+
+(deftest hexhold-messages-handler-test
+  (testing "valid request returns 200 with the hex's messages"
+    (let [g (make-globo)
+          _ (protocols/add-hexhold-message! (:hexholds g) "a" {:id "u1" :name "Me"} "hello")
+          body (json/generate-string {:hex-id "a"})
+          resp (handlers/hexhold-messages-handler g
+                                                  {:body (io/input-stream (.getBytes body))})]
+      (is (= 200 (:status resp)))
+      (is (= 1 (count (-> resp :body json/parse-string (get "messages")))))))
+  (testing "unknown hex returns an empty messages list"
+    (let [g (make-globo)
+          body (json/generate-string {:hex-id "nope"})
+          resp (handlers/hexhold-messages-handler g
+                                                  {:body (io/input-stream (.getBytes body))})]
+      (is (= 200 (:status resp)))
+      (is (= [] (-> resp :body json/parse-string (get "messages"))))))
+  (testing "malformed body returns 400"
+    (let [g (make-globo)
+          resp (handlers/hexhold-messages-handler g
+                                                  {:body (io/input-stream (.getBytes "not json"))})]
+      (is (= 400 (:status resp)))))
+  (testing "missing hex-id returns 400"
+    (let [g (make-globo)
+          body (json/generate-string {})
+          resp (handlers/hexhold-messages-handler g
+                                                  {:body (io/input-stream (.getBytes body))})]
       (is (= 400 (:status resp))))))

@@ -7,7 +7,8 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [is.galt.globo.protocols :as protocols]
-   [is.galt.globo.server.publish :as publish]))
+   [is.galt.globo.server.publish :as publish]
+   [is.galt.globo.server.validation :as validation]))
 
 (def default-favorites
   "Favorites seeded for newly registered users."
@@ -123,14 +124,36 @@
       (publish/publish! globo :everybody event))))
 
 (defn paint-hexhold
-  "Store a hexhold paint (or clear when :color is nil) and broadcast the
-  change to everybody."
-  [{:keys [globo]} {:keys [content]}]
+  "Store a hexhold paint (or clear when :color is nil) on behalf of the
+  sender and broadcast the change to everybody. When the cell is claimed
+  by another user, the paint is rejected and a warning notification goes
+  to the sender's own connections only."
+  [{:keys [globo user-id]} {:keys [content]}]
   (let [result (protocols/paint-hexhold! (:hexholds globo)
                                          (:hex-id content)
-                                         (:color content))]
+                                         (:color content)
+                                         user-id)]
+    (if result
+      (publish/publish! globo :everybody
+                        {:type :hexholds-updated :content result})
+      (publish/publish! globo (protocols/connection-ids-for-user (:storage globo) user-id)
+                        (validation/system-notification
+                         :warning
+                         {:type :paint-hexhold :hex-id (:hex-id content)}
+                         "This hexagon is claimed by another user.")))))
+
+(defn hexhold-message
+  "Append a message to a hexhold and broadcast it to everybody."
+  [{:keys [globo user-id]} {:keys [content]}]
+  (let [storage (user-storage globo)
+        author {:id user-id :name (or (:name (protocols/get-user storage user-id)) "Anonymous")}
+        msg (protocols/add-hexhold-message! (:hexholds globo)
+                                            (:hex-id content)
+                                            author
+                                            (:text content))]
     (publish/publish! globo :everybody
-                      {:type :hexholds-updated :content result})))
+                      {:type :hexhold-message
+                       :content {:hex-id (:hex-id content) :message msg}})))
 
 (defn process
   "Dispatch an inbound message. Returns the boolean result of the final
@@ -142,6 +165,7 @@
     :update-favorite (update-favorite {:globo globo :user-id user-id} message)
     :add-favorite (add-favorite {:globo globo :user-id user-id} message)
     :paint-hexhold (paint-hexhold {:globo globo :user-id user-id} message)
+    :hexhold-message (hexhold-message {:globo globo :user-id user-id} message)
     :user-offline (user-offline {:globo globo :user-id user-id} message)
     :user-online (publish/publish! globo :everybody message)
     :broadcast (publish/publish! globo :everybody message)

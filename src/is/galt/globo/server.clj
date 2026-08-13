@@ -95,6 +95,8 @@
      (partial handlers/send-message-handler globo)
      (str "POST" (:mount-path globo) "/hexholds/query")
      (partial handlers/hexholds-query-handler globo)
+     (str "POST" (:mount-path globo) "/hexholds/messages")
+     (partial handlers/hexhold-messages-handler globo)
      (str "GET" (:mount-path globo) "/assets/**")
      handlers/assets-handler}))
 

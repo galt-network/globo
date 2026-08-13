@@ -74,17 +74,33 @@
     "Vector of placeable-object config maps for user-id."))
 
 (defprotocol HexholdStore
-  "Shared state for the hexholds (H3 hexagon paint) feature."
+  "Shared state for the hexholds (H3 hexagon paint) feature.
+
+  Ownership rules (enforced by every implementation): an unclaimed cell
+  is claimed by its first painter; only the owner may repaint or clear
+  it; clearing also releases the claim, after which anyone can claim it
+  again."
   (paint-hexhold!
-    [this hex-id color]
-    "Paint hex-id with a color keyword, or clear when color is nil.
-     Returns {:id hex-id :color color-or-nil}.")
+    [this hex-id color owner-id]
+    "Paint hex-id with a color keyword on behalf of owner-id, or clear
+     when color is nil. Returns {:id hex-id :color color-or-nil
+     :owner-id owner-or-nil} on success, or nil when rejected (the cell
+     is claimed by another user).")
   (hexhold-colors
     [this]
     "Sparse map of hex-id-string -> color-keyword for all painted cells.")
   (query-hexholds
     [this cell-ids]
     "Intersect cell-ids with the land index. Returns a vector of
-     {:id string :color (maybe keyword)} for land cells only; unpainted
-     land cells have :color nil. When the land index is nil every
-     requested cell counts as land (dev fallback)."))
+     {:id string :color (maybe keyword) :owner-id (maybe string)} for
+     land cells only; unpainted land cells have :color and :owner-id
+     nil. When the land index is nil every requested cell counts as
+     land (dev fallback).")
+  (hexhold-messages
+    [this hex-id]
+    "Vector of messages for hex-id (empty when none).")
+  (add-hexhold-message!
+    [this hex-id author text]
+    "Append a message to hex-id. `author` is a user map {:id string
+     :name string}. Returns the message map {:id string :author map
+     :content string :sent-at string}."))

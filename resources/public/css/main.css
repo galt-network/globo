@@ -188,3 +188,19 @@ div#globe-container {
   margin-bottom: 0;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
+
+.hud-panel .panel-block.is-active {
+  background: rgba(0, 188, 212, 0.12);
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 0.2rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.hexhold-messages {
+  max-height: 10rem;
+}

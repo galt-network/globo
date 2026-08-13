@@ -4,6 +4,7 @@
    [clojure.string :as str]
    [is.galt.globo.ui.connection.subscriptions :as conn.subs]
    [is.galt.globo.ui.events :as ui.events]
+   [is.galt.globo.ui.hexholds :as hexholds]
    [is.galt.globo.ui.icons :refer [icon]]
    [is.galt.globo.ui.subscriptions :as ui.subs]
    [re-frame.core :as rf]
@@ -306,17 +307,146 @@
            [icon :cancel "Cancel"]
            [icon :pick-location "Pick on map"])]]]]]))
 
+(defn hud-desktop-column
+  [contents]
+  [:div.column.is-12-mobile.is-12-tablet.is-4-desktop.hud-column
+   contents])
+
+(defn hexholds-list
+  []
+  (let [my-hexholds @(rf/subscribe [::ui.subs/my-hexholds])
+        selected-id @(rf/subscribe [::ui.subs/hexholds-selected-id])
+        messages @(rf/subscribe [::ui.subs/hexholds-messages-map])]
+    [hud-panel
+     [:div.has-text-primary-80.is-size-7.has-text-weight-medium.pb-1 "My hexholds"]
+     (if (empty? my-hexholds)
+       [:div.has-text-grey-light.is-size-7.p-2
+        "No claimed hexholds visible. Zoom in and paint a hexagon."]
+       [:div.hud-scroll
+        (for [h my-hexholds]
+          ^{:key (:id h)}
+          [panel-row
+           [:div.level.is-mobile.p-0
+            {:class (when (= selected-id (:id h)) "is-active")
+             :on-click #(rf/dispatch [::ui.events/select-hexhold (:id h)])
+             :style {:cursor "pointer"}}
+            [:div.level-left
+             [:span.swatch {:style {:background (hexholds/color->rgba (:color h))}}]
+             [:span.has-text-primary-80.is-size-6.ml-2
+              (hexholds/short-hex-id (:id h))]]
+            [:div.level-right
+             (when (seq (get messages (:id h)))
+               [:span.tag.is-small.is-info.is-light
+                (count (get messages (:id h)))])]]])])]))
+
+(defn hexholds-message-wall
+  [hex-id]
+  (let [messages @(rf/subscribe [::ui.subs/hexholds-messages])]
+    (r/with-let [text (r/atom "")]
+      (let [send-fn #(when-not (str/blank? @text)
+                       (rf/dispatch [::ui.events/leave-hexhold-message hex-id @text])
+                       (reset! text ""))]
+        [:div
+         [:div.has-text-primary-80.is-size-7.has-text-weight-medium.pb-1 "Messages"]
+         (if (empty? messages)
+           [:div.has-text-grey-light.is-size-7.p-2 "No messages yet."]
+           [:div.hexhold-messages.hud-scroll
+            (for [m messages]
+              ^{:key (:id m)}
+              [:div.has-text-primary-80.is-size-7
+               (str (get-in m [:author :name] "?") ": " (:content m))])])
+         [:div.field.has-addons.send-message.mt-1
+          [:div.control.is-expanded
+           [:input.input.is-small
+            {:type "text" :value @text
+             :placeholder "Leave a message…"
+             :on-change #(reset! text (.. % -target -value))
+             :on-key-down #(when (= (.-key %) "Enter") (send-fn))}]]
+          [:div.control
+           [:button.button.is-info.is-small {:on-click send-fn} "Send"]]]]))))
+
+(defn hexholds-operations
+  []
+  (let [entry @(rf/subscribe [::ui.subs/hexholds-selected-entry])]
+    [hud-panel
+     [:div.has-text-primary-80.is-size-7.has-text-weight-medium.pb-1 "Operations"]
+     (if-not entry
+       [:div.has-text-grey-light.is-size-7.p-2
+        "Select a hexhold from the list."]
+       (let [{:keys [id color]} entry
+             {:keys [lat lng]} (hexholds/cell->latlng id)]
+         [:div
+          [panel-row
+           [:div.level.is-mobile.p-0
+            [:div.level-left
+             [:div
+              [:div.has-text-primary-80.is-size-6 (hexholds/short-hex-id id)]
+              [:div.has-text-grey-light.is-size-7
+               (str (.toFixed lat 3) ", " (.toFixed lng 3))]]]]]
+          [panel-row
+           [:div.level.is-mobile.p-0
+            [:div.level-left [:span.has-text-grey-light.is-size-7 "Color"]]
+            [:div.level-right
+             (for [c hexholds/paint-colors]
+               ^{:key (name c)}
+               [:button.button.is-small.ml-1
+                {:class (when (= c color) "is-active is-outlined")
+                 :style {:background (hexholds/color->rgba c)}
+                 :title (name c)
+                 :on-click #(rf/dispatch [::ui.events/change-hexhold-color id c])}])]]]
+          [panel-row
+           [:button.button.is-small.is-danger.is-outlined
+            {:on-click #(rf/dispatch [::ui.events/abandon-hexhold id])}
+            "Abandon"]]
+          [panel-row
+           ^{:key id}
+           [hexholds-message-wall id]]]))]))
+
+(defn hexholds-info
+  []
+  (let [info @(rf/subscribe [::ui.subs/hexholds-info])]
+    [hud-panel
+     [:div.has-text-primary-80.is-size-7.has-text-weight-medium.pb-1 "Map info"]
+     (if-not info
+       [:div.has-text-grey-light.is-size-7.p-2 "Move the globe to see map info."]
+       (let [rows [["Zoom"
+                    (str (.toFixed (:altitude info) 2)
+                         " (" (Math/round (:zoom-pct info)) "%)")]
+                   ["Height" (str (hexholds/format-thousands (Math/round (:height-km info))) " km")]
+                   ["Visible area" (str (hexholds/format-thousands (Math/round (:visible-area-km2 info))) " km²")]
+                   ["Polygons visible" (str (:visible-count info))]
+                   ["Claimed" (str (:painted-count info))]
+                   ["Claimed of visible" (str (:painted-pct info) " %")]]]
+         [:div
+          (for [[label value] rows]
+            ^{:key label}
+            [panel-row
+             [:div.level.is-mobile.p-0
+              [:div.level-left [:span.has-text-grey-light.is-size-7 label]]
+              [:div.level-right [:span.has-text-primary-80.is-size-7 value]]]])]))]))
+
+(defn hexholds-panel
+  []
+  [:div.hud-vstack
+   [:div.columns.is-variable.is-2.hud-columns
+    [hud-desktop-column (hexholds-list)]
+    [hud-desktop-column (hexholds-operations)]
+    [hud-desktop-column (hexholds-info)]]])
+
 (defn panel-tabs
   []
   (let [active-panel @(rf/subscribe [::ui.subs/active-panel])]
     [:div.tabs.is-toggle.is-toggle-rounded.is-flex-shrink-0.mb-0
      [:ul
-      (for [[key icon label] [[:users "👥" "Users"]
-                              [:places "📌" "Places"]
-                              [:messages "💬" "Messages"]]]
+      (for [[key icon label toggle?] [[:users "👥" "Users" false]
+                                      [:places "📌" "Places" false]
+                                      [:messages "💬" "Messages" false]
+                                      [:hexholds "⬡" "Hexholds" true]]]
         ^{:key key}
-        [:li {:class (when (= active-panel key) "is-active")}
-         [:a {:on-click #(rf/dispatch [::ui.events/set-active-panel key])}
+        [:li {:class (when (and (not toggle?) (= active-panel key)) "is-active")}
+         [:a {:on-click #(if toggle?
+                           (rf/dispatch [::ui.events/toggle-hexholds])
+                           (rf/dispatch [::ui.events/set-active-panel key]))}
           [:span.icon.is-small icon]
           [:span label]]])]]))
 
@@ -337,21 +467,19 @@
 (defn mobile-hud-details
   []
   (let [settings-open? @(rf/subscribe [::ui.subs/settings-open?])
+        panel-open? @(rf/subscribe [::ui.subs/hexholds-panel-open?])
         active-panel @(rf/subscribe [::ui.subs/active-panel])
-        body (if settings-open?
-               [settings-panel]
-               (case active-panel
-                 :users [users-view]
-                 :places [places-view]
-                 :messages [messages-view]))]
+        body (cond
+               settings-open? [settings-panel]
+               panel-open? [hexholds-panel]
+               :else (case active-panel
+                       :users [users-view]
+                       :places [places-view]
+                       :messages [messages-view]
+                       [users-view]))]
     [hud-details-layout
      {:header [hud-details-title-bar]
       :body body}]))
-
-(defn hud-desktop-column
-  [contents]
-  [:div.column.is-12-mobile.is-12-tablet.is-4-desktop.hud-column
-   contents])
 
 (defn hud-header
   []
@@ -372,12 +500,14 @@
 (defn desktop-hud-details
   []
   (let [settings-open? @(rf/subscribe [::ui.subs/settings-open?])
-        body (if settings-open?
-               [settings-panel]
-               [:div.columns.is-variable.is-2.hud-columns
-                [hud-desktop-column (users-view)]
-                [hud-desktop-column (places-view)]
-                [hud-desktop-column (messages-view)]])]
+        panel-open? @(rf/subscribe [::ui.subs/hexholds-panel-open?])
+        body (cond
+               settings-open? [settings-panel]
+               panel-open? [hexholds-panel]
+               :else [:div.columns.is-variable.is-2.hud-columns
+                      [hud-desktop-column (users-view)]
+                      [hud-desktop-column (places-view)]
+                      [hud-desktop-column (messages-view)]])]
     [hud-details-layout
      {:header [hud-header]
       :body body}]))

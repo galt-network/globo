@@ -3,7 +3,8 @@
   effects — fully unit tested. h3-js 4.5.0 API: latLngToCell,
   cellToLatLng, gridDisk, cellToBoundary, cellArea (string units)."
   (:require
-   ["h3-js" :as h3]))
+   ["h3-js" :as h3]
+   [clojure.string :as str]))
 
 (def resolution 5)
 (def max-altitude 0.8)
@@ -70,19 +71,31 @@
   [altitude]
   (and (some? altitude) (<= altitude max-altitude)))
 
+(defn can-paint?
+  "Ownership gate: an entry (visible hexhold map with :owner-id) can be
+   painted by user-id when it is unowned or owned by them. A missing
+   entry is not blocked client-side — the server decides."
+  [entry user-id]
+  (let [owner (:owner-id entry)]
+    (or (nil? owner) (= owner user-id))))
+
 (defn click-paint-hexhold
   "Pure decision: the hex-id to paint for a click point, or nil. Requires
    an explicit :hex-id from the screen-space hit test — lat/lng-only
    points (globe.gl's stale internal raycast on background clicks) are
    never painted. Also gates on the layer being active, the camera being
-   within the LOD altitude, and the cell being part of :visible."
+   within the LOD altitude, the cell being part of :visible, and the
+   ownership rules (can-paint?)."
   [db point altitude]
   (let [hex-id (:hex-id point)
-        visible-ids (into #{} (map :id) (get-in db [:hexholds :visible]))]
+        visible (get-in db [:hexholds :visible])
+        entry (some #(when (= hex-id (:id %)) %) visible)
+        user-id (get-in db [:connection :user-id])]
     (when (and (some? hex-id)
                (get-in db [:hexholds :active?])
                (within-lod? altitude)
-               (contains? visible-ids hex-id))
+               (some? entry)
+               (can-paint? entry user-id))
       {:hex-id hex-id})))
 
 (defn update-visible-entry
@@ -291,3 +304,76 @@
    :color color
    :geometry {:type "Polygon"
               :coordinates [(cell-boundary-ring id)]}})
+
+(def earth-radius-km 6371)
+(def max-zoom-out-altitude 2.5)
+(def paint-colors [:red :blue :green :yellow :purple])
+
+(defn my-hexholds
+  "Visible hexhold entries owned by user-id. Unowned cells are never
+   listed as anyone's."
+  [visible user-id]
+  (filterv #(and (:owner-id %) (= user-id (:owner-id %))) visible))
+
+(defn height-km
+  "Camera height above the surface in km (relative altitude x R)."
+  [altitude]
+  (* earth-radius-km (or altitude 0)))
+
+(defn zoom-pct
+  "Zoom as a percentage: 100 at the surface, 0 when fully zoomed out
+   (the whole globe at max-zoom-out-altitude)."
+  [altitude]
+  (let [a (or altitude 0)]
+    (js/Math.max 0 (js/Math.min 100 (* 100 (- 1 (/ a max-zoom-out-altitude)))))))
+
+(defn visible-cap-area-km2
+  "Approximate km2 of the globe surface actually in view: the spherical
+   cap along the screen-corner ray, 2*pi*R^2*(1 - cos theta) with theta
+   from cap-angle-deg."
+  [altitude aspect]
+  (let [theta (deg->rad (cap-angle-deg altitude aspect))]
+    (* 2 js/Math.PI earth-radius-km earth-radius-km (- 1 (js/Math.cos theta)))))
+
+(defn viewport-info
+  "Live map info for the hexholds-info column: camera zoom/height, the
+   visible globe-cap area, and viewport hexhold counts. Returns nil when
+   the camera is unavailable (altitude or aspect missing)."
+  [{:keys [altitude aspect]} visible]
+  (when (and (some? altitude) (some? aspect))
+    (let [n (count visible)
+          painted (count (filter :color visible))]
+      {:altitude altitude
+       :zoom-pct (zoom-pct altitude)
+       :height-km (height-km altitude)
+       :visible-area-km2 (visible-cap-area-km2 altitude aspect)
+       :visible-count n
+       :painted-count painted
+       :painted-pct (if (zero? n) 0 (js/Math.round (* 100 (/ painted n))))})))
+
+(defn upsert-message
+  "Conjoin a hexhold message, replacing any existing message with the
+   same :id (server echo overwrites the optimistic entry)."
+  [messages message]
+  (conj (filterv #(not= (:id %) (:id message)) messages) message))
+
+(defn short-hex-id
+  "Display form of a hex-id: first 8 chars with an ellipsis when longer."
+  [hex-id]
+  (if (<= (count hex-id) 8)
+    hex-id
+    (str (subs hex-id 0 8) "…")))
+
+(defn format-thousands
+  "Round a number and insert thousands separators (display only)."
+  [n]
+  (let [digits (str (js/Math.round (js/Math.abs n)))]
+    (if (<= (count digits) 3)
+      digits
+      (let [rem (mod (count digits) 3)]
+        (->> (if (zero? rem)
+               (partition-all 3 digits)
+               (cons (subs digits 0 rem)
+                     (partition-all 3 (subs digits rem))))
+             (map str/join)
+             (str/join ","))))))

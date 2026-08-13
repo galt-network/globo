@@ -1,7 +1,10 @@
 (ns is.galt.globo.server.hexholds
-  "Default in-memory HexholdStore implementation: a sparse map of
-  hex-id -> color keyword in an atom, plus an optional land index
-  (a set of land hex-ids loaded from a classpath resource)."
+  "Default in-memory HexholdStore implementation: an atom holding sparse
+  maps of hex-id -> color keyword, hex-id -> owner-id, and hex-id ->
+  messages, plus an optional land index (a set of land hex-ids loaded
+  from a classpath resource). Enforces the ownership rules: the first
+  painter claims a cell, only the owner may repaint or clear it, and
+  clearing releases the claim."
   (:require
    [clojure.java.io :as io]
    [clojure.set :as set]
@@ -9,27 +12,49 @@
    [is.galt.globo.protocols :as protocols]))
 
 (def default-state
-  {:colors {}})
+  {:colors {}
+   :owners {}
+   :messages {}})
+
+(defn- apply-paint
+  [st hex-id color owner-id]
+  (-> st
+      ((if color
+         #(assoc-in % [:colors hex-id] color)
+         #(update % :colors dissoc hex-id)))
+      ((if color
+         #(assoc-in % [:owners hex-id] owner-id)
+         #(update % :owners dissoc hex-id)))))
 
 (defrecord InMemoryHexholdStore [state land-cells]
   protocols/HexholdStore
-  (paint-hexhold! [_ hex-id color]
-    (let [color (some-> color keyword)
-          result {:id hex-id :color color}]
-      (if color
-        (swap! state assoc-in [:colors hex-id] color)
-        (swap! state update :colors dissoc hex-id))
-      result))
+  (paint-hexhold! [_ hex-id color owner-id]
+    (let [color (some-> color keyword)]
+      (locking state
+        (let [current-owner (get (or (:owners @state) {}) hex-id)]
+          (when (or (nil? current-owner) (= current-owner owner-id))
+            (swap! state apply-paint hex-id color owner-id)
+            {:id hex-id :color color :owner-id (when color owner-id)})))))
   (hexhold-colors [_]
     (:colors @state))
   (query-hexholds [_ cell-ids]
     (let [colors (:colors @state)
+          owners (or (:owners @state) {})
           requested (if land-cells
                       (set/intersection (set cell-ids) land-cells)
                       (set cell-ids))]
       (mapv (fn [id]
-              {:id id :color (get colors id)})
-            requested))))
+              {:id id :color (get colors id) :owner-id (get owners id)})
+            requested)))
+  (hexhold-messages [_ hex-id]
+    (get (or (:messages @state) {}) hex-id []))
+  (add-hexhold-message! [_ hex-id author text]
+    (let [message {:id (str (random-uuid))
+                   :author author
+                   :content text
+                   :sent-at (str (java.time.Instant/now))}]
+      (swap! state update-in [:messages hex-id] (fnil conj []) message)
+      message)))
 
 (defn in-memory-hexhold-store
   "Create an in-memory HexholdStore. Optionally pass an existing atom with

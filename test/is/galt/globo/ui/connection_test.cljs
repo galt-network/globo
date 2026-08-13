@@ -40,6 +40,16 @@
              (conn-events/sse-type->event {:type :system-notification
                                            :content content})))))
 
+  (testing "hexhold-message dispatches to receive-hexhold-message"
+    (let [content {:hex-id "abc"
+                   :message {:id "m1"
+                             :author {:id "u1" :name "Me"}
+                             :content "hi"
+                             :sent-at "2026-01-01T00:00:00Z"}}]
+      (is (= [:is.galt.globo.ui.events/receive-hexhold-message content]
+             (conn-events/sse-type->event {:type :hexhold-message
+                                           :content content})))))
+
   (testing "unknown types return nil"
     (is (nil? (conn-events/sse-type->event {:type :totally-unknown
                                             :content {}})))))

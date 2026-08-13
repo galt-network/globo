@@ -31,9 +31,13 @@
    :rings {}
    :message-arcs {}
    :hexholds {:active? false
+              :panel-open? false
               :colors {}
               :visible []
-              :hover-id nil}
+              :hover-id nil
+              :selected-id nil
+              :info nil
+              :messages {}}
    :system-notifications []
    :hud-open? true
    :models-ready? false})
@@ -53,7 +57,8 @@
                                 :assets-base-url assets-base-url
                                 :connection-url (str globo-api-base-url "/connection")
                                 :send-message-url (str globo-api-base-url "/send-message")
-                                :hexholds-query-url (str globo-api-base-url "/hexholds/query")
+                                 :hexholds-query-url (str globo-api-base-url "/hexholds/query")
+                                 :hexholds-messages-url (str globo-api-base-url "/hexholds/messages")
                                 :max-favorite-places 3}))
       :fx [[:dispatch [:is.galt.globo.ui.connection.events/initialize]]]})))
 

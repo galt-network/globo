@@ -65,7 +65,8 @@
           (js/setTimeout
            (fn []
              (reset! hexhold-viewport-refresh-timer nil)
-             (rf/dispatch [:is.galt.globo.ui.events/refresh-hexholds-viewport]))
+             (rf/dispatch [:is.galt.globo.ui.events/refresh-hexholds-viewport])
+             (rf/dispatch [:is.galt.globo.ui.events/update-hexholds-info]))
            250)))
 
 (defn- default-ring-params
@@ -134,18 +135,30 @@
       clj->js))
 
 (defn- apply-hover-tint!
-  "Re-apply the hover tint (fill + teal border stroke) to the currently
-   hovered cell after a paint or rebuild sync (both reset cap-color and
-   stroke-color to the painted state)."
+  "Re-apply hover + selection tints (fill + teal border stroke) after a
+   paint or rebuild sync (both reset cap-color and stroke-color to the
+   painted state). One full pass over the cache: hovered and selected
+   cells get the teal stroke, everything else reverts to painted fill +
+   default stroke — so a selection change also un-highlights the
+   previously selected cell."
   []
   (let [app-db @rf.db/app-db
-        hover-id (get-in app-db [:hexholds :hover-id])]
-    (when-let [f (get @hexhold-cache hover-id)]
-      (aset f "cap-color" (hexholds/hover-fill-color
-                           (get-in app-db [:hexholds :colors hover-id])))
-      (aset f "stroke-color" hexholds/highlight-stroke-color)
-      (when-let [g @globe-instance]
-        (j/call g :polygonsData @hexholds-data)))))
+        hover-id (get-in app-db [:hexholds :hover-id])
+        selected-id (get-in app-db [:hexholds :selected-id])]
+    (doseq [[id f] @hexhold-cache]
+      (let [color (get-in app-db [:hexholds :colors id])]
+        (cond
+          (= id hover-id)
+          (do (aset f "cap-color" (hexholds/hover-fill-color color))
+              (aset f "stroke-color" hexholds/highlight-stroke-color))
+          (= id selected-id)
+          (do (aset f "cap-color" (hexholds/fill-color color))
+              (aset f "stroke-color" hexholds/highlight-stroke-color))
+          :else
+          (do (aset f "cap-color" (hexholds/fill-color color))
+              (aset f "stroke-color" hexholds/default-stroke)))))
+    (when-let [g @globe-instance]
+      (j/call g :polygonsData @hexholds-data))))
 
 (defn sync-hexholds-from-db!
   "Reconcile the globe polygonsData array with the app-db :hexholds
@@ -191,14 +204,17 @@
    exactly over the caps) — so the outline is pixel-aligned with the cell
    by construction, at any camera angle. Mutates the cached JS features in
    place — no geometry rebuild."
-  [from-id to-id colors]
+  [from-id to-id colors selected-id]
   (let [cache @hexhold-cache
         from-f (when from-id (get cache from-id))
         to-f (when to-id (get cache to-id))]
     (when (or from-f to-f)
       (when from-f
         (aset from-f "cap-color" (hexholds/fill-color (get colors from-id)))
-        (aset from-f "stroke-color" hexholds/default-stroke))
+        (aset from-f "stroke-color"
+              (if (= from-id selected-id)
+                hexholds/highlight-stroke-color
+                hexholds/default-stroke)))
       (when to-f
         (aset to-f "cap-color" (hexholds/hover-fill-color (get colors to-id)))
         (aset to-f "stroke-color" hexholds/highlight-stroke-color))

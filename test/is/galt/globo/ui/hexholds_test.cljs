@@ -435,3 +435,131 @@
       (is (nil? (hexholds/click-paint-hexhold db {:hex-id cell-a} 1.5))))
     (testing "nil altitude (no viewpoint) never paints"
       (is (nil? (hexholds/click-paint-hexhold db {:hex-id cell-a} nil))))))
+
+(defn near [a b] (< (js/Math.abs (- a b)) 1))
+
+(deftest click-paint-hexhold-ownership-gate-test
+  (let [cell-a (hexholds/latlng->cell 20 0)]
+    (testing "a cell owned by another user is never painted"
+      (is (nil? (hexholds/click-paint-hexhold
+                 {:hexholds {:active? true
+                             :visible [{:id cell-a :color :red :owner-id "u2"}]}
+                  :connection {:user-id "u1"}}
+                 {:hex-id cell-a} 0.3))))
+    (testing "anonymous user cannot paint an owned cell"
+      (is (nil? (hexholds/click-paint-hexhold
+                 {:hexholds {:active? true
+                             :visible [{:id cell-a :color :red :owner-id "u1"}]}}
+                 {:hex-id cell-a} 0.3))))
+    (testing "the owner paints their own cell"
+      (is (= {:hex-id cell-a}
+             (hexholds/click-paint-hexhold
+              {:hexholds {:active? true
+                          :visible [{:id cell-a :color :red :owner-id "u1"}]}
+               :connection {:user-id "u1"}}
+              {:hex-id cell-a} 0.3))))
+    (testing "an unowned cell is paintable by anyone (nil user-id included)"
+      (is (= {:hex-id cell-a}
+             (hexholds/click-paint-hexhold
+              {:hexholds {:active? true
+                          :visible [{:id cell-a :color nil :owner-id nil}]}}
+              {:hex-id cell-a} 0.3))))))
+
+(deftest height-km-test
+  (is (= 3185.5 (hexholds/height-km 0.5)))
+  (is (= 15927.5 (hexholds/height-km 2.5)))
+  (is (= 0 (hexholds/height-km 0)))
+  (is (= 0 (hexholds/height-km nil))))
+
+(deftest zoom-pct-test
+  (is (= 100 (hexholds/zoom-pct 0)))
+  (is (= 80 (hexholds/zoom-pct 0.5)))
+  (is (= 50 (hexholds/zoom-pct 1.25)))
+  (is (= 0 (hexholds/zoom-pct 2.5)))
+  (testing "zoomed out past the whole-globe altitude clamps to 0"
+    (is (= 0 (hexholds/zoom-pct 3))))
+  (is (= 100 (hexholds/zoom-pct nil))))
+
+(deftest visible-cap-area-km2-test
+  (testing "whole globe in view (alt >= ~0.82 at aspect 1) is a half sphere"
+    (is (near (hexholds/visible-cap-area-km2 2.5 1)
+              (* 2 js/Math.PI 6371 6371)))
+    (is (near (hexholds/visible-cap-area-km2 0.9 1)
+              (* 2 js/Math.PI 6371 6371))))
+  (testing "at the surface the visible cap collapses to ~0"
+    (is (near (hexholds/visible-cap-area-km2 0 1) 0)))
+  (testing "zooming in shrinks the visible area"
+    (is (< (hexholds/visible-cap-area-km2 0.2 1)
+           (hexholds/visible-cap-area-km2 0.5 1)))
+    (is (< (hexholds/visible-cap-area-km2 0.5 1)
+           (hexholds/visible-cap-area-km2 2.5 1)))))
+
+(deftest viewport-info-test
+  (let [visible [{:id "a" :color :red :owner-id "u1"}
+                 {:id "b" :color nil :owner-id nil}
+                 {:id "c" :color :blue :owner-id "u2"}]]
+    (testing "whole globe in view"
+      (let [info (hexholds/viewport-info {:lat 0 :lng 0 :altitude 2.5 :aspect 1}
+                                          visible)]
+        (is (= 2.5 (:altitude info)))
+        (is (= 0 (:zoom-pct info)))
+        (is (= 15927.5 (:height-km info)))
+        (is (near (:visible-area-km2 info) (* 2 js/Math.PI 6371 6371)))
+        (is (= 3 (:visible-count info)))
+        (is (= 2 (:painted-count info)))
+        (is (= 67 (:painted-pct info)))))
+    (testing "zoomed in values"
+      (let [info (hexholds/viewport-info {:lat 0 :lng 0 :altitude 0.5 :aspect 1}
+                                          visible)]
+        (is (= 80 (:zoom-pct info)))
+        (is (= 3185.5 (:height-km info)))))
+    (testing "empty viewport"
+      (let [info (hexholds/viewport-info {:lat 0 :lng 0 :altitude 0.5 :aspect 1}
+                                          [])]
+        (is (= 0 (:visible-count info)))
+        (is (= 0 (:painted-count info)))
+        (is (= 0 (:painted-pct info)))))
+    (testing "missing aspect or altitude yields nil (globe not mounted)"
+      (is (nil? (hexholds/viewport-info {:lat 0 :lng 0 :altitude 0.5} visible)))
+      (is (nil? (hexholds/viewport-info {:lat 0 :lng 0 :aspect 1} visible))))))
+
+(deftest my-hexholds-test
+  (let [visible [{:id "a" :color :red :owner-id "u1"}
+                 {:id "b" :color :blue :owner-id "u2"}
+                 {:id "c" :color nil :owner-id nil}]]
+    (is (= [{:id "a" :color :red :owner-id "u1"}]
+           (hexholds/my-hexholds visible "u1")))
+    (is (= [] (hexholds/my-hexholds visible "nobody")))
+    (testing "unowned cells are not listed as mine"
+      (is (= [] (hexholds/my-hexholds visible nil))))))
+
+(deftest can-paint?-test
+  (testing "unowned cell (nil owner) is paintable"
+    (is (true? (hexholds/can-paint? {:id "a" :owner-id nil} "u1"))))
+  (testing "the owner can repaint"
+    (is (true? (hexholds/can-paint? {:id "a" :owner-id "u1"} "u1"))))
+  (testing "a non-owner cannot paint"
+    (is (false? (hexholds/can-paint? {:id "a" :owner-id "u2"} "u1"))))
+  (testing "anonymous user cannot paint an owned cell"
+    (is (false? (hexholds/can-paint? {:id "a" :owner-id "u2"} nil))))
+  (testing "a missing entry is not blocked client-side (server decides)"
+    (is (true? (hexholds/can-paint? nil "u1")))))
+
+(deftest upsert-message-test
+  (let [m1 {:id "1" :content "one"}
+        m2 {:id "2" :content "two"}]
+    (is (= [m1] (hexholds/upsert-message [] m1)))
+    (is (= [m1 m2] (hexholds/upsert-message [m1] m2)))
+    (testing "same id replaces in place"
+      (is (= [{:id "1" :content "one!"}]
+             (hexholds/upsert-message [m1] {:id "1" :content "one!"}))))))
+
+(deftest short-hex-id-test
+  (is (= "85283473…" (hexholds/short-hex-id "85283473fffffff")))
+  (is (= "abc" (hexholds/short-hex-id "abc"))))
+
+(deftest format-thousands-test
+  (is (= "7,900" (hexholds/format-thousands 7900)))
+  (is (= "255,032,236" (hexholds/format-thousands 255032236)))
+  (is (= "255" (hexholds/format-thousands 255)))
+  (is (= "0" (hexholds/format-thousands 0))))

@@ -137,6 +137,18 @@
     (catch Exception e
       (json-response 400 {:status "error" :error (.getMessage e)}))))
 
+(defn hexhold-messages-handler
+  "POST endpoint: return the messages for a hex-id. Malformed bodies or a
+  missing/non-string hex-id -> 400."
+  [globo req]
+  (try
+    (let [{:keys [hex-id]} (json/parse-string (slurp (:body req)) true)]
+      (if (string? hex-id)
+        (json-response 200 {:messages (protocols/hexhold-messages (:hexholds globo) hex-id)})
+        (json-response 400 {:status "error" :error "invalid hex-id"})))
+    (catch Exception e
+      (json-response 400 {:status "error" :error (.getMessage e)}))))
+
 (defn assets-handler
   "Serves static assets from resources/public/ (e.g. compiled JS, 3D models)."
   [req]
