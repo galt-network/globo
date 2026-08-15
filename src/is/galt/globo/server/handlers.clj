@@ -158,6 +158,30 @@
     (catch Exception e
       (json-response 400 {:status "error" :error (.getMessage e)}))))
 
+(def overlay-kinds #{"adm1-borders" "adm1-names" "cities"})
+
+(defn- valid-overlay-query?
+  [{:keys [kinds bbox]}]
+  (and (sequential? kinds)
+       (seq kinds)
+       (every? overlay-kinds kinds)
+       (map? bbox)
+       (every? number? ((juxt :west :south :east :north) bbox))))
+
+(defn overlays-query-handler
+  [globo req]
+  (try
+    (let [body (json/parse-string (slurp (:body req)) true)]
+      (if (valid-overlay-query? body)
+        (json-response 200 (protocols/query-overlays
+                            (:overlays globo)
+                            {:kinds (set (map keyword (:kinds body)))
+                             :bbox (select-keys (:bbox body) [:west :south :east :north])
+                             :altitude (:altitude body)}))
+        (json-response 400 {:status "error" :error "invalid overlay query"})))
+    (catch Exception e
+      (json-response 400 {:status "error" :error (.getMessage e)}))))
+
 (defn assets-handler
   "Serves static assets from resources/public/ (e.g. compiled JS, 3D models)."
   [req]

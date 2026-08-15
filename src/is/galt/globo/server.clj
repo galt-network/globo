@@ -10,6 +10,7 @@
    [is.galt.globo.server.handlers :as handlers]
    [is.galt.globo.server.hexholds :as hexholds]
    [is.galt.globo.server.messages :as messages]
+   [is.galt.globo.server.overlays :as overlays]
    [is.galt.globo.server.placeables :as placeables]
    [is.galt.globo.server.publish :as publish]
    [is.galt.globo.server.storage :as storage]
@@ -17,7 +18,7 @@
 
 (defrecord Globo
   [mount-path storage connections placeables hexholds log-fn
-   validate-user-update max-user-name-length])
+   validate-user-update max-user-name-length overlays])
 
 (def default-max-user-name-length 42)
 
@@ -56,7 +57,7 @@
                      present in an :update-user patch (e.g. uniqueness)"
   ([] (create-globo {}))
   ([{:keys [mount-path storage connections placeables hexholds log-fn
-            validate-user-update max-user-name-length]}]
+            validate-user-update max-user-name-length overlays]}]
    (let [max-length (or max-user-name-length default-max-user-name-length)]
      (->Globo (or mount-path "/map")
               (or storage (storage/in-memory-globo-storage))
@@ -69,7 +70,8 @@
                             (hexholds/load-land-index "hexholds/land-res5.txt")))
               (or log-fn println)
               (build-validate-user-update validate-user-update max-length)
-              max-length))))
+              max-length
+              (or overlays (overlays/static-overlay-provider))))))
 
 (defn normalize
   "Accepts either a Globo record or legacy deps
@@ -127,6 +129,8 @@
      (partial handlers/hexholds-query-handler globo)
      (str "POST" (:mount-path globo) "/hexholds/messages")
      (partial handlers/hexhold-messages-handler globo)
+     (str "POST" (:mount-path globo) "/overlays/query")
+     (partial handlers/overlays-query-handler globo)
      (str "GET" (:mount-path globo) "/assets/**")
      handlers/assets-handler}))
 

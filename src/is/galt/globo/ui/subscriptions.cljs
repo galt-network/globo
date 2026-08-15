@@ -150,3 +150,8 @@
    (let [selected-id (get-in db [:hexholds :selected-id])]
      (first (filter #(= selected-id (:id %))
                     (get-in db [:hexholds :visible]))))))
+
+(rf/reg-sub
+ ::natural-earth
+ (fn [db _]
+   (:natural-earth db)))

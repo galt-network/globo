@@ -8,6 +8,16 @@
   is.galt.globo.server.connections; the default placeable-object source is
   a static config vector in is.galt.globo.server.placeables.")
 
+(defprotocol MapOverlayProvider
+  "Viewport overlays (admin borders / names / cities). Hosts implement
+   this to back queries with their own store; the default is a static
+   in-memory/file provider."
+  (query-overlays
+    [this {:keys [kinds bbox]}]
+    "Return {:paths [{:id :coords}] :labels [{:id :text :lat :lng :class}]}
+     for features whose kind is in `kinds` and whose bbox intersects
+     `bbox` {:west :south :east :north}."))
+
 (defprotocol GloboStorage
   "Persistent state for the globo server: users, map objects, chat
   messages, and the user -> connection-ids mapping."

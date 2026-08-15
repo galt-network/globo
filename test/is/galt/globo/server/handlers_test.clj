@@ -195,3 +195,23 @@
           resp (handlers/hexhold-messages-handler g
                                                   {:body (io/input-stream (.getBytes body))})]
       (is (= 400 (:status resp))))))
+
+(deftest overlays-query-handler-test
+  (testing "valid request returns matching overlays"
+    (let [g (globo/create-globo
+             {:overlays (is.galt.globo.server.overlays/static-overlay-provider
+                         {:paths [{:id "arg-1" :kind :adm1-borders
+                                   :bbox {:west -65 :south -33 :east -63 :north -31}
+                                   :coords [[-32 -64]]}]
+                          :labels []})})
+          body (json/generate-string {:kinds ["adm1-borders"]
+                                      :bbox {:west -70 :south -40 :east -60 :north -30}})
+          resp (handlers/overlays-query-handler g {:body (io/input-stream (.getBytes body))})]
+      (is (= 200 (:status resp)))
+      (is (= 1 (count (get (json/parse-string (:body resp)) "paths"))))))
+  (testing "invalid kinds return 400"
+    (let [g (make-globo)
+          body (json/generate-string {:kinds ["nope"]
+                                      :bbox {:west 0 :south 0 :east 1 :north 1}})
+          resp (handlers/overlays-query-handler g {:body (io/input-stream (.getBytes body))})]
+      (is (= 400 (:status resp))))))

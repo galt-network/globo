@@ -8,8 +8,8 @@
    [is.galt.globo.ui.hexholds :as hexholds]
    [is.galt.globo.ui.icons :refer [icon]]
    [is.galt.globo.ui.subscriptions :as ui.subs]
-    [is.galt.globo.ui.user-name :as user-name]
-    [is.galt.globo.user-figure :as uf]
+   [is.galt.globo.ui.user-name :as user-name]
+   [is.galt.globo.user-figure :as uf]
    [re-frame.core :as rf]
    [reagent.core :as r]))
 
@@ -267,14 +267,7 @@
          :on-click #(rf/dispatch [::ui.events/set-active-view view])}
         [icon icon-name]])]))
 
-(defn settings-panel
-  "Settings panel: name input with a Save button (Enter also saves) and
-   location picker. The name draft lives in app-db so it survives
-   component remounts (the HUD swaps layout trees on the mobile
-   breakpoint); it is sent to the server only on save, and server-side
-   rejections (e.g. length or host uniqueness checks) are shown inline
-   under the field. Fills the HUD body area below the header. Reuses
-   hud-panel/panel-row so styling matches the other panels."
+(defn settings-user-panel
   []
   (let [current-user @(rf/subscribe [::ui.subs/current-user])
         mouse-action @(rf/subscribe [::ui.subs/mouse-action])
@@ -330,22 +323,51 @@
                       (if picking?
                         (rf/dispatch [::ui.events/clear-mouse-action])
                         (rf/dispatch [::ui.events/set-mouse-action {:type :pick-user-location}])))}
-          (if picking?
-            [icon :cancel "Cancel"]
-            [icon :pick-location "Pick on map"])]]]]
-      [panel-row
-       [:div.field
-        [:label.label.has-text-light-80 "Figure color"]
-        [:div.buttons.are-small
-         (for [c uf/palette-colors]
-           ^{:key (name c)}
-           [:button.button.is-small
-            {:class (when (= c (get-in user-location [:model :color]))
-                      "is-active is-outlined")
-             :style {:background (get uf/color->hex c)}
-             :disabled (not (uf/has-figure? current-user))
-             :title (name c)
-             :on-click #(rf/dispatch [::ui.events/set-figure-color c])}])]]]]))
+         (if picking?
+           [icon :cancel "Cancel"]
+           [icon :pick-location "Pick on map"])]]]]
+     [panel-row
+      [:div.field
+       [:label.label.has-text-light-80 "Figure color"]
+       [:div.buttons.are-small
+        (for [c uf/palette-colors]
+          ^{:key (name c)}
+          [:button.button.is-small
+           {:class (when (= c (get-in user-location [:model :color]))
+                     "is-active is-outlined")
+            :style {:background (get uf/color->hex c)}
+            :disabled (not (uf/has-figure? current-user))
+            :title (name c)
+            :on-click #(rf/dispatch [::ui.events/set-figure-color c])}])]]]]))
+
+(defn settings-map-panel
+  []
+  (let [ne @(rf/subscribe [::ui.subs/natural-earth])]
+    [hud-panel
+     {:class ["hud-settings-map-panel"]}
+     [:div.has-text-primary-80.is-size-7.has-text-weight-medium.pb-1 "Map"]
+     [panel-row
+      [:div.field
+        (for [[k label] [[:adm0-borders? "ADM0 borders"]
+                         [:adm0-names? "ADM0 names"]
+                         [:adm1-borders? "ADM1 borders"]
+                         [:adm1-names? "ADM1 names"]
+                         [:cities? "Cities"]]]
+         ^{:key (name k)}
+         [:label.checkbox.has-text-light-80.mr-3
+          [:input {:type "checkbox"
+                   :checked (boolean (get ne k))
+                   :on-change #(rf/dispatch [::ui.events/toggle-natural-earth k])}]
+          (str " " label)])]]]))
+
+(defn settings-panel
+  []
+  [:div.hud-vstack
+   [:div.columns.is-variable.is-2.hud-columns
+    [:div.column.is-12-mobile.is-7-tablet.hud-column
+     [settings-user-panel]]
+    [:div.column.is-12-mobile.is-5-tablet.hud-column
+     [settings-map-panel]]]])
 
 (defn hud-desktop-column
   [contents]

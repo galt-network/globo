@@ -9,8 +9,9 @@
    [applied-science.js-interop :as j]
    [camel-snake-kebab.core :as csk]
     [is.galt.globo.ui.globe-gl-helpers :refer [apply-config!]]
-    [is.galt.globo.ui.hexholds :as hexholds]
-    [is.galt.globo.user-figure :as uf]
+     [is.galt.globo.ui.hexholds :as hexholds]
+     [is.galt.globo.ui.natural-earth :as ne]
+     [is.galt.globo.user-figure :as uf]
    [is.galt.globo.ui.subscriptions :as ui.subs]
    [re-frame.core :as rf]
    [re-frame.db :as rf.db]
@@ -67,9 +68,10 @@
           (js/setTimeout
            (fn []
              (reset! hexhold-viewport-refresh-timer nil)
-             (rf/dispatch [:is.galt.globo.ui.events/refresh-hexholds-viewport])
-             (rf/dispatch [:is.galt.globo.ui.events/update-hexholds-info]))
-           250)))
+              (rf/dispatch [:is.galt.globo.ui.events/refresh-hexholds-viewport])
+              (rf/dispatch [:is.galt.globo.ui.events/update-hexholds-info])
+              (rf/dispatch [:is.galt.globo.ui.events/refresh-natural-earth-scale]))
+            250)))
 
 (defn- default-ring-params
   "Fill in globe.gl Rings Layer defaults for any field absent from `ring`."
@@ -112,6 +114,38 @@
   (-> arc
       (assoc :color "#00bcd4" :__arc-id id)
       clj->js))
+
+(defonce ne-path-cache (atom {}))
+(defonce ne-html-cache (atom {}))
+
+(defn- path-js
+  [path]
+  (or (get @ne-path-cache (:id path))
+      (let [obj (clj->js path)]
+        (swap! ne-path-cache assoc (:id path) obj)
+        obj)))
+
+(defn- html-label-el
+  [d]
+  (let [id (j/get d :id)]
+    (or (get @ne-html-cache id)
+        (let [el (js/document.createElement "div")]
+          (set! (.-className el) (or (j/get d :class) "ne-label"))
+          (set! (.-textContent el) (j/get d :text))
+          (when-let [pop (j/get d :pop-max)]
+            (let [r (min 14 (max 4 (+ 3 (* 2.2 (/ (Math/log pop) (.-LN10 js/Math))))))]
+              (.setProperty (.-style el) "--ne-r" (str r "px"))))
+          (swap! ne-html-cache assoc id el)
+          el))))
+
+(defn sync-natural-earth!
+  [{:keys [globe-image-url paths labels]}]
+  (when-let [g @globe-instance]
+    (when globe-image-url
+      (j/call g :globeImageUrl globe-image-url))
+    (j/call g :pathsData (clj->js (mapv path-js (or paths []))))
+    (j/call g :htmlElementsData (clj->js (or labels [])))
+    (j/call g :labelsData (clj->js []))))
 
 (defn sync-arcs-from-db!
   "Reconcile the globe-side arcs JS array with the app-db :message-arcs
@@ -481,9 +515,7 @@
         (THREE/Mesh. geom mat)))))
 
 (def globe-gl-config
-  {:height 600
-   :width 800
-   :globe-image-url "//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
+  {:globe-image-url "//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
    :background-color "#000011"
    :show-atmosphere true
    :atmosphere-altitude "0.2"
@@ -515,8 +547,25 @@
                                  obj)
    :on-custom-layer-click (fn [_ _ _] nil)
    :on-custom-layer-hover (fn [_ _] nil)
-   :polygons-data []
-   :polygon-geo-json-geometry "geometry"
+    :paths-data []
+    :path-points "coords"
+    :path-color (fn [d]
+                  (if (= (j/get d :kind) "adm1-borders")
+                    "rgba(40,40,40,0.5)"
+                    "rgba(20,20,20,0.92)"))
+    :path-stroke nil
+    :path-point-alt 0.001
+    :path-transition-duration 0
+    :labels-data []
+    :label-include-dot false
+    :html-elements-data []
+    :html-lat "lat"
+    :html-lng "lng"
+    :html-altitude 0.002
+    :html-element html-label-el
+    :html-transition-duration 0
+    :polygons-data []
+    :polygon-geo-json-geometry "geometry"
    :polygon-cap-color "cap-color"
    :polygon-side-color (constantly nil)
    :polygon-stroke-color "stroke-color"
@@ -654,10 +703,18 @@
                                  ;; before this globe was (re)mounted, so
                                  ;; they survive hot-reloads.
                                  (sync-rings-from-db! (get-in @rf.db/app-db [:rings]))
-                                 (sync-hexholds-from-db!
-                                  (get-in @rf.db/app-db [:hexholds :visible])
-                                  (get-in @rf.db/app-db [:hexholds :colors]))
-                                 (resize!)
+                                  (sync-hexholds-from-db!
+                                   (get-in @rf.db/app-db [:hexholds :visible])
+                                   (get-in @rf.db/app-db [:hexholds :colors]))
+                                  (resize!)
+                                  (try
+                                    (let [db @rf.db/app-db]
+                                      (sync-natural-earth!
+                                       (ne/overlay-view
+                                        db
+                                        (get-in db [:config :assets-base-url]))))
+                                    (finally
+                                      (resize!)))
                                  (let [assets-base-url @(rf/subscribe [::ui.subs/assets-base-url])
                                        placeables (vals (get-in @rf.db/app-db [:placeable-map-objects]))]
                                    (preload-user-models assets-base-url placeables))

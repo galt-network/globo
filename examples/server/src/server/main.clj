@@ -6,8 +6,9 @@
    [clj-simple-router.core :as router]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [is.galt.globo.server :as globo.server]
-   [is.galt.globo.server.connections :as connections]
+    [is.galt.globo.server :as globo.server]
+    [is.galt.globo.server.connections :as connections]
+    [is.galt.globo.server.overlays :as overlays]
    [is.galt.globo.server.middleware :as middleware]
    [is.galt.globo.server.storage :as gstorage]
    [org.httpkit.server :as hk-server]
@@ -76,10 +77,14 @@
 
 (defn make-routes
   [{:keys [mount-path example-root port] :as deps}]
-  (let [globo (globo.server/create-globo
-               {:mount-path mount-path
-                :storage (gstorage/in-memory-globo-storage storage)
-                :connections (connections/in-memory-connection-store sse-clients)})]
+   (let [overlay-file (io/file ".." "data" "natural-earth-overlays.json")
+         globo (globo.server/create-globo
+                {:mount-path mount-path
+                 :storage (gstorage/in-memory-globo-storage storage)
+                 :connections (connections/in-memory-connection-store sse-clients)
+                 :overlays (if (.exists overlay-file)
+                             (overlays/file-overlay-provider overlay-file)
+                             (overlays/static-overlay-provider))})]
     (cond-> {(str "* " mount-path "/**")
              (globo.server/create-handler globo)}
       example-root (assoc "GET /" (index-handler deps)))))

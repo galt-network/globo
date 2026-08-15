@@ -42,6 +42,14 @@
               :info nil
               :messages {}}
    :system-notifications []
+    :natural-earth {:adm0-borders? true
+                   :adm0-names? true
+                   :adm1-borders? true
+                   :adm1-names? true
+                   :cities? true
+                   :altitude 2.2
+                   :layers {}
+                   :close {:paths [] :labels []}}
    :hud-open? true
    :models-ready? false})
 
@@ -62,9 +70,11 @@
                                 :send-message-url (str globo-api-base-url "/send-message")
                                  :hexholds-query-url (str globo-api-base-url "/hexholds/query")
                                  :hexholds-messages-url (str globo-api-base-url "/hexholds/messages")
+                                 :overlays-query-url (str globo-api-base-url "/overlays/query")
                                 :max-favorite-places 3
                                  :hexholds-marks-budget 500}))
-      :fx [[:dispatch [:is.galt.globo.ui.connection.events/initialize]]]})))
+      :fx [[:dispatch [:is.galt.globo.ui.connection.events/initialize]]
+           [:dispatch [:is.galt.globo.ui.events/load-natural-earth]]]})))
 
 (defn ^:export init
   [^js raw-params]

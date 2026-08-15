@@ -3,14 +3,16 @@
   favorites, chat messages, message arcs, rings, and mobile detection."
   (:require
    [applied-science.js-interop :as j]
-   [clojure.set :as set]
-   [clojure.string :as str]
+    [clojure.set :as set]
+    [clojure.string :as str]
+    [clojure.walk :as walk]
     [is.galt.globo.ui.camera :as camera]
     [is.galt.globo.ui.hexholds :as hexholds]
     [is.galt.globo.ui.hud-views :as hud-views]
-   [is.galt.globo.ui.message-arcs :as message-arcs]
-   [is.galt.globo.ui.models :as models]
-   [is.galt.globo.ui.presentation.map :as ui.map]
+    [is.galt.globo.ui.message-arcs :as message-arcs]
+    [is.galt.globo.ui.models :as models]
+    [is.galt.globo.ui.natural-earth :as ne]
+    [is.galt.globo.ui.presentation.map :as ui.map]
    [is.galt.globo.ui.user-name :as user-name]
    [is.galt.globo.user-figure :as uf]
    [re-frame.core :as rf]))
@@ -726,3 +728,94 @@
                     (get-in db [:hexholds :messages hex-id] [])
                     message)]
      {:db (assoc-in db [:hexholds :messages hex-id] messages')})))
+
+(defn- natural-earth-sync
+  [db]
+  [::sync-natural-earth
+   (ne/overlay-view db (get-in db [:config :assets-base-url]))])
+
+(rf/reg-fx
+ ::sync-natural-earth
+ (fn [view]
+   (ui.map/sync-natural-earth! view)))
+
+(rf/reg-event-fx
+ ::load-natural-earth
+ (fn [{:keys [db]} _]
+   (let [assets (get-in db [:config :assets-base-url])
+         fetches (for [{:keys [path file kind]} ne/overlay-sources]
+                   [:fetch {:method :get
+                            :url (ne/overlay-url assets file)
+                            :response-content-types {#"application/.*json" :json
+                                                     #"text/.*" :json}
+                            :on-success [::natural-earth-layer-loaded path kind]
+                            :on-failure [::natural-earth-layer-failed file]}])]
+     {:fx (vec fetches)})))
+
+(rf/reg-event-fx
+ ::natural-earth-layer-loaded
+ (fn [{:keys [db]} [_ path kind response]]
+   (let [fc (walk/keywordize-keys (or (:body response) response))
+         convert (if (= kind :paths) ne/paths-from-geojson ne/labels-from-geojson)
+         db' (assoc-in db (into [:natural-earth :layers] path) (convert fc))]
+     {:db db'
+      :fx [(natural-earth-sync db')]})))
+
+(rf/reg-event-fx
+ ::natural-earth-layer-failed
+ (fn [_ [_ file]]
+   (js/console.warn "Natural Earth layer failed" file)
+   {}))
+
+(rf/reg-event-fx
+ ::toggle-natural-earth
+ (fn [{:keys [db]} [_ k]]
+   (let [db' (update-in db [:natural-earth k] not)]
+     {:db db'
+      :fx [(natural-earth-sync db')
+           [:dispatch [::refresh-natural-earth-scale]]]})))
+
+(rf/reg-event-fx
+ ::refresh-natural-earth-scale
+ [(rf/inject-cofx ::globe-viewpoint)]
+ (fn [{:keys [db globe-viewpoint]} _]
+   (let [altitude (or (:altitude globe-viewpoint) 2.2)
+         prev (get-in db [:natural-earth :altitude] 2.2)
+         db' (assoc-in db [:natural-earth :altitude] altitude)
+         close? (< altitude ne/close-altitude)
+         kinds (ne/close-query-kinds (:natural-earth db'))]
+     (cond
+       (and close? (seq kinds))
+       {:db db'
+        :fx [[:fetch {:method :post
+                      :url (get-in db [:config :overlays-query-url])
+                      :body {:kinds kinds
+                             :bbox (ne/viewport-bbox globe-viewpoint)
+                             :altitude altitude}
+                      :request-content-type :json
+                      :response-content-types {#"application/.*json" :json}
+                      :on-success [::natural-earth-overlays-loaded]
+                      :on-failure [::natural-earth-overlays-failed]}]
+             (natural-earth-sync db')]}
+       (= (ne/layers-for-altitude altitude) (ne/layers-for-altitude prev))
+       {}
+       :else
+       (let [cleared (assoc-in db' [:natural-earth :close] {:paths [] :labels []})]
+         {:db cleared
+          :fx [(natural-earth-sync cleared)]})))))
+
+(rf/reg-event-fx
+ ::natural-earth-overlays-loaded
+ (fn [{:keys [db]} [_ response]]
+   (let [body (walk/keywordize-keys (or (:body response) response))
+         db' (assoc-in db [:natural-earth :close]
+                       {:paths (or (:paths body) [])
+                        :labels (or (:labels body) [])})]
+     {:db db'
+      :fx [(natural-earth-sync db')]})))
+
+(rf/reg-event-fx
+ ::natural-earth-overlays-failed
+ (fn [_ _]
+   (js/console.warn "Natural Earth overlay query failed")
+   {}))
